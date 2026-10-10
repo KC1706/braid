@@ -49,40 +49,44 @@ export default {
     const url = new URL(req.url);
 
     if (url.pathname === "/") {
-      return json({ service: "braid-worker", ok: true, endpoints: ["/api/provision"] });
+      return json({ service: "braid-worker", ok: true, endpoints: ["/api/base", "/api/fork"] });
     }
 
-    // Create a base repo + N forks, each with a write token — the swarm's substrate.
-    if (url.pathname === "/api/provision" && req.method === "POST") {
-      const body = (await req.json().catch(() => ({}))) as { base?: string; forks?: number };
-      const run = Date.now().toString(36);
-      const base = body.base ?? `braid-base-${run}`;
-      const n = Math.min(Math.max(body.forks ?? 3, 1), 8);
-
-      const baseRepo = await env.ARTIFACTS.create(base, {
+    // Step 1: create an empty base repo + a write token so the caller can seed
+    // it with the baseline app before forking.
+    if (url.pathname === "/api/base" && req.method === "POST") {
+      const body = (await req.json().catch(() => ({}))) as { name?: string };
+      const name = body.name ?? `braid-base-${Date.now().toString(36)}`;
+      const baseRepo = await env.ARTIFACTS.create(name, {
         description: "Braid baseline (control-plane provisioned)",
       });
+      const tok = await (await env.ARTIFACTS.get(name)).createToken("write", 3600);
+      return json({
+        name: baseRepo.name,
+        remote: baseRepo.remote,
+        defaultBranch: baseRepo.defaultBranch,
+        token: tok.plaintext,
+        expiresAt: tok.expiresAt,
+      });
+    }
+
+    // Step 2: fork the (now seeded) base once per agent, each with a write token.
+    if (url.pathname === "/api/fork" && req.method === "POST") {
+      const body = (await req.json().catch(() => ({}))) as { base?: string; agents?: string[]; count?: number };
+      if (!body.base) return json({ error: "base required" }, 400);
+      const agents =
+        body.agents ??
+        Array.from({ length: Math.min(Math.max(body.count ?? 3, 1), 8) }, (_, i) => `agent-${i + 1}`);
 
       const forks: { agent: string; name: string; remote: string; token: string; expiresAt: string }[] = [];
-      using handle = await env.ARTIFACTS.get(base);
-      for (let i = 1; i <= n; i++) {
-        const forkName = `${base}-agent-${i}`;
+      using handle = await env.ARTIFACTS.get(body.base);
+      for (const agent of agents) {
+        const forkName = `${body.base}-${agent}`;
         const forked = await handle.fork(forkName, { defaultBranchOnly: true });
         const tok = await (await env.ARTIFACTS.get(forkName)).createToken("write", 3600);
-        forks.push({
-          agent: `agent-${i}`,
-          name: forkName,
-          remote: forked.remote,
-          token: tok.plaintext,
-          expiresAt: tok.expiresAt,
-        });
+        forks.push({ agent, name: forkName, remote: forked.remote, token: tok.plaintext, expiresAt: tok.expiresAt });
       }
-
-      return json({
-        run,
-        base: { name: baseRepo.name, remote: baseRepo.remote, defaultBranch: baseRepo.defaultBranch },
-        forks,
-      });
+      return json({ base: body.base, forks });
     }
 
     return json({ error: "not found" }, 404);

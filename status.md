@@ -3,7 +3,7 @@
 > Cross-session memory. Update this at the end of every work session: what changed, what's next,
 > what's blocked. Newest entry on top. See `plan.md` for the full plan.
 
-**Deadline:** 2026-10-14 · **Today:** 2026-10-10 · **Phase:** Day 2 core done (built offline-first)
+**Deadline:** 2026-10-14 · **Today:** 2026-10-10 · **Phase:** FULL PIPELINE PROVEN on real Artifacts
 
 ## Quick state
 - [~] Day 0 — de-risk: isomorphic-git push to Artifacts + Sandbox git/test — BLOCKED on creds
@@ -31,6 +31,23 @@
 - [ ] wrangler installed / logged in
 
 ---
+
+## 🎉 END-TO-END SWARM ON REAL ARTIFACTS — PROVEN (2026-10-10)
+- `integrator/demo/swarm-live.ts` (`npm -w integrator run swarm:live`) runs the WHOLE pipeline on real
+  Cloudflare Artifacts: control-plane Worker creates base repo → seed baseline (real git push) → fork ×3
+  (real Artifacts forks) → 3 agents push divergent branches to their forks (agent-1 validation & agent-2
+  ratelimit both edit getUser → conflict; agent-3 docs → clean) → integrator clones base, fetches all forks,
+  merges (git auto + union conflict resolution), re-runs REAL vitest green after each merge, pushes merged
+  result back to base/main. Writes `.braid/trail.json`.
+- **Independently verified:** fresh `git clone` of the base repo contains merged `users.ts` (BOTH features),
+  agent files, trail.json, and full history (3 agent commits → 2 merge commits → trail commit). Tests 2/2.
+- Token field from `issue-token`/binding is **`plaintext`** (not `token`); git auth via basic-auth URL
+  `https://x:<secret>@host/...` (secret = token minus `?expires=`) OR Bearer `http.extraHeader` — both work.
+- This = Day-1 (swarm) + Day-2 (integrator) demonstrated on real infra. Local-driven orchestration is the
+  stand-in for Sandbox/agent-Workers (same git+merge+test code will move there unchanged).
+- STILL TODO for full "built-the-CF-way" story: move agent compute into Workers (iso-git, MemoryFS) and/or
+  integrator into a Sandbox; push events → Queue → review Workflow; orchestrator DO + WS dashboard; Workers
+  Builds preview URL. Anthropic key (.dev.vars) still pending → ClaudeResolver runs union-only for now.
 
 ## Day-1 progress (verified LIVE 2026-10-10) — Artifacts fully de-risked
 - **User upgraded to Workers Paid.** Artifacts access now granted (namespaces list returns []).

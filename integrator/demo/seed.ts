@@ -14,7 +14,7 @@ export interface SeedResult {
   agents: { id: string; branch: string; intent: string }[];
 }
 
-const FILES_BASELINE: Record<string, string> = {
+export const FILES_BASELINE: Record<string, string> = {
   "package.json": JSON.stringify(
     {
       name: "braid-demo-target",
@@ -79,6 +79,16 @@ A tiny Hono API the agent swarm improves.
 ## Hardening
 This service validates input and rate-limits requests. (added by the docs agent)
 `;
+
+/**
+ * The three agents' changes, shared by the local demo (seed) and the live swarm.
+ * agent-1 and agent-2 both edit src/users.ts (true conflict); agent-3 is docs-only.
+ */
+export const AGENT_EDITS: Record<string, { intent: string; files: Record<string, string> }> = {
+  "agent-1": { intent: "input validation", files: { "src/users.ts": USERS_VALIDATION, "src/validate.ts": VALIDATE_TS } },
+  "agent-2": { intent: "rate limiting", files: { "src/users.ts": USERS_RATELIMIT, "src/ratelimit.ts": RATELIMIT_TS } },
+  "agent-3": { intent: "documentation", files: { "README.md": README_DOCS } },
+};
 
 async function writeAll(dir: string, files: Record<string, string>) {
   for (const [path, content] of Object.entries(files)) {

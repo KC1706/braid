@@ -6,6 +6,7 @@
   "description": "Braid's hybrid merge engine: deterministic git 3-way merge + resolver for true conflicts + real-test re-verification.",
   "scripts": {
     "demo": "tsx demo/run.ts",
+    "swarm:live": "tsx demo/swarm-live.ts",
     "test": "vitest run"
   },
   "devDependencies": {
