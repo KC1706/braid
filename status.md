@@ -32,6 +32,21 @@
 
 ---
 
+## Day-1 progress (verified LIVE 2026-10-10) — Artifacts fully de-risked
+- **User upgraded to Workers Paid.** Artifacts access now granted (namespaces list returns []).
+- **Live push round-trip PROVEN:** created repo `braid/braid-smoketest`, pushed from local git via
+  `http.extraHeader="Authorization: Bearer <token>"`, cloned back, content matched. Risk #1 = done for real.
+- **Control-plane Worker DEPLOYED:** `worker/` → https://braid-worker.kunalchandoa925.workers.dev
+  - Binding `env.ARTIFACTS` (namespace `braid`), `compatibility_flags: [nodejs_compat]`.
+  - `POST /api/provision {forks:N}` → `create()` base repo, `fork()` it N times (defaultBranchOnly),
+    `createToken("write",3600)` per fork → returns remotes + plaintext tokens. **Verified: 3 forks + tokens.**
+  - **Fork primitive (last Artifacts unknown) confirmed working via the binding.**
+- Binding API (from docs, confirmed): `ARTIFACTS.create/get/list/delete`; handle `.fork(name,{defaultBranchOnly})`,
+  `.createToken(scope,ttl)->{plaintext,expiresAt}`, `.log`, `.readFile({ref,path})`, `.info`. Handle is `using`-disposable.
+- NEXT: orchestrator DO (task/agent state + WS for dashboard) + agent loop (codegen → iso-git push to fork);
+  then risk #2 (Sandbox clone+merge+test). Anthropic key (.dev.vars) still pending → agent codegen falls back
+  to deterministic canned edits until provided.
+
 ## Day-0 findings (verified 2026-10-10)
 - **wrangler authed** as kunalchandoa925@gmail.com. **Account ID:** `06bff0b64288392a55e653c32310fc63`.
   OAuth token has `artifacts:write` + `ai:write` scopes.
