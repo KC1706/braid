@@ -5,30 +5,59 @@
 
 **Deadline:** 2026-10-14 · **Today:** 2026-10-10 · **Phase:** FULL PIPELINE PROVEN on real Artifacts
 
+> **TL;DR for a fresh session:** The core thesis (swarm of agents → test-verified hybrid merge) is
+> BUILT and PROVEN end-to-end on real Cloudflare Artifacts. We effectively finished Day 0/1/2. What's
+> left is demo polish + leaning into CF primitives (dashboard, Sandbox/Worker compute, Queue→Workflow).
+> Nothing left is high-risk. A legitimate working submission already exists.
+
 ## Quick state
-- [~] Day 0 — de-risk: isomorphic-git push to Artifacts + Sandbox git/test — BLOCKED on creds
-  (no `wrangler login`, no `ANTHROPIC_API_KEY`/`CF_*` in env). Built the cloud-independent core instead.
-- [ ] Day 1 — swarm + awareness layer (fork N, agents code & push, events→DO) — needs creds
-- [x] Day 2 — integrator (git merge + conflict resolver + re-test loop) — ✅ DONE & TESTED offline
-- [ ] Day 3 — review Workflow + live dashboard
-- [x] Day 4 (partial) — README + MIT license written
+- [x] Day 0 — de-risk: Artifacts auth + push — ✅ PROVEN live (Bearer header & basic-auth URL both work)
+- [x] Day 1 — swarm: fork N + agents push divergent branches — ✅ PROVEN live via control-plane Worker
+- [x] Day 2 — integrator (git merge + conflict resolver + re-test loop) — ✅ DONE, TESTED, run live
+- [ ] Day 3 — review Workflow + live dashboard — NOT STARTED (highest demo value next)
+- [~] Day 4 — README + MIT license done; video + submit still to do
+
+## HOW TO RESUME (run these)
+- Local demo (no cloud): `npm install` then `npm -w integrator run demo`
+- Full swarm on REAL Artifacts: `npm -w integrator run swarm:live`  (uses deployed worker)
+- All tests: `npm test`  (baseline 2 + integrator 4)
+- Worker: `cd worker && npx wrangler deploy` → https://braid-worker.kunalchandoa925.workers.dev
+
+## KEY FACTS (don't re-derive)
+- **GitHub:** `KC1706/braid` (PRIVATE). Pushed through commit `de62228`. User WANTS frequent commits/pushes
+  (for their contribution graph) — commit+push after each meaningful chunk. Attribution line in use:
+  `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
+- **Account:** Workers PAID (user upgraded). Account ID `06bff0b64288392a55e653c32310fc63`.
+  `wrangler` logged in as kunalchandoa925@gmail.com. Artifacts namespace = `braid`.
+- **Artifacts remote URL:** `https://<ACCOUNT_ID>.artifacts.cloudflare.net/git/<ns>/<repo>.git`
+- **Artifacts git auth:** token field is **`plaintext`** (format `art_v2_x_<hex>?expires=<unix>`).
+  Basic-auth URL `https://x:<secret>@<host>/...` (secret = token minus `?expires=`) OR
+  `git -c http.extraHeader="Authorization: Bearer <full-token>"`. `write` scope needed to push.
+- **Binding API:** `env.ARTIFACTS.create/get/list/delete`; handle `.fork(name,{defaultBranchOnly})`,
+  `.createToken(scope,ttl)->{plaintext,expiresAt}`, `.log`, `.readFile({ref,path})`, `.info`; handle is
+  `using`-disposable. wrangler.jsonc: `"artifacts":[{"binding":"ARTIFACTS","namespace":"braid"}]` + `nodejs_compat`.
 
 ## Locked decisions
-- Concept A: swarm + hybrid AI merge (compose, don't pick a winner).
-- Claude via Cloudflare AI Gateway for codegen + conflict reconciliation.
-- Verification = real tests in a Sandbox (NOT an AI judge).
-- Scope = tight vertical slice; name = **Braid** (tentative).
+- Concept A: swarm + hybrid merge (compose, don't pick a winner).
+- Resolver is pluggable: `UnionResolver` (deterministic, default) / `ClaudeResolver` (AI Gateway or direct
+  Anthropic) / `HybridResolver` (union first, Claude on retry). Verification = REAL tests (not an AI judge).
+- Name = **Braid**.
 
-## Open unknowns (verify Day 0)
-1. isomorphic-git ↔ Artifacts auth: exact token header/URL format for push. (biggest risk)
-2. Sandbox SDK: can it clone an Artifacts remote + run tests?
-3. Event subscription: dashboard vs API for `cf.artifacts.repo.pushed`.
+## Open unknowns / NOT yet done
+1. Sandbox SDK: run the integrator (clone+merge+npm test) inside a CF Sandbox. Pattern known
+   (git-repo-per-sandbox template; auth via `https://x:<secret>@host`). Our integrator is plain Node → should
+   move in nearly unchanged. NOT yet built.
+2. Agent compute inside Workers via isomorphic-git (needs a MemoryFS class, see docs example). Currently agents
+   run from the local swarm-live.ts script (a faithful stand-in). NOT yet relocated.
+3. Event subscription `cf.artifacts.repo.pushed` → Queue → review Workflow. NOT yet built.
+4. Orchestrator Durable Object (task/agent state + WebSocket) + React dashboard. NOT yet built.
+5. `.dev.vars` with `ANTHROPIC_API_KEY` still ABSENT → ClaudeResolver untested live; conflicts use union path.
+   (Optional `CF_AI_GATEWAY` base URL to route via AI Gateway.)
 
-## Environment checklist
-- [ ] Cloudflare Workers Paid account
-- [ ] Artifacts beta enabled
-- [ ] Anthropic API key + AI Gateway route configured
-- [ ] wrangler installed / logged in
+## NEXT STEP (recommended)
+Build the **orchestrator Durable Object + React/WS dashboard** — the demo money-shot visual (live swarm,
+diverging branches, conflict resolving, trail panel). Then optionally move integrator into a Sandbox and wire
+Queue→Workflow. Ask user whether to prioritize dashboard vs Sandbox vs Queue first; remind about `.dev.vars`.
 
 ---
 
