@@ -37,6 +37,18 @@
   `.createToken(scope,ttl)->{plaintext,expiresAt}`, `.log`, `.readFile({ref,path})`, `.info`; handle is
   `using`-disposable. wrangler.jsonc: `"artifacts":[{"binding":"ARTIFACTS","namespace":"braid"}]` + `nodejs_compat`.
 
+## IMPORTANT MENTAL MODEL — what the "agents" currently are
+- The 3 "agents" in the demo are **SCRIPTED, not LLMs.** Each applies a hardcoded change from
+  `AGENT_EDITS` in `integrator/demo/seed.ts` (agent-1 validation, agent-2 ratelimit — both edit
+  `getUser()` → guaranteed conflict; agent-3 docs). `swarm-live.ts` just does clone→write files→
+  commit→push per fork. This is deliberate: keeps the demo deterministic and the guaranteed conflict.
+- The ONLY live LLM in the pipeline today is **Workers AI**, used for **conflict RESOLUTION** (merge
+  engine retry path), NOT for writing the agents' code.
+- The novel/hard part = the INTEGRATOR (merge + re-test). Agent codegen is the easy, swappable part.
+- To make agents "real": replace the `AGENT_EDITS[...]` file lookup with an LLM call (Workers AI
+  `/api/resolve`-style endpoint, or Claude) given the fork's code + intent → returns new file contents.
+  Everything downstream is unchanged. The `agent/` package is still an empty placeholder.
+
 ## Locked decisions
 - Concept A: swarm + hybrid merge (compose, don't pick a winner).
 - Resolver is pluggable: `UnionResolver` (deterministic, default) / `ClaudeResolver` (AI Gateway or direct
@@ -58,10 +70,15 @@
    `ANTHROPIC_API_KEY` still optional (ClaudeResolver path untested live).
 6. `VERIFY.md` added — full manual step-by-step to verify the whole flow by hand.
 
-## NEXT STEP (recommended)
-Build the **orchestrator Durable Object + React/WS dashboard** — the demo money-shot visual (live swarm,
-diverging branches, conflict resolving, trail panel). Then optionally move integrator into a Sandbox and wire
-Queue→Workflow. Ask user whether to prioritize dashboard vs Sandbox vs Queue first; remind about `.dev.vars`.
+## NEXT STEP (user to choose)
+Two strong options — ASK the user which to prioritize:
+1. **Real LLM agents** — make agents actually WRITE their code via Workers AI (new worker endpoint
+   `/api/codegen` given fork code + intent → new files), replacing `AGENT_EDITS`. Makes the "swarm of
+   real agents" story fully true end-to-end. (User was asked this at end of last session.)
+2. **Dashboard + orchestrator Durable Object** — the demo money-shot visual (live swarm, diverging
+   branches, conflict resolving, trail panel); needed for the 5–10 min video.
+Then: optionally move integrator into a Sandbox, wire push→Queue→Workflow, Workers Builds preview URL.
+Reminder: `.dev.vars` ANTHROPIC_API_KEY optional (Workers AI already covers LLM, no key needed).
 
 ---
 
