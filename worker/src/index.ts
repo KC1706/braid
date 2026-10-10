@@ -10,7 +10,13 @@
 
 interface Env {
   ARTIFACTS: ArtifactsNamespace;
+  AI: { run(model: string, input: unknown): Promise<{ response?: string } & Record<string, unknown>> };
 }
+
+// Workers AI model used to reconcile a true conflict hunk. Overridable; a
+// larger instruct model gives better merges. Correctness is still decided by
+// the integrator re-running the real test suite — the model never has final say.
+const RESOLVE_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 
 // Minimal shapes for the Artifacts binding (authoritative types come from
 // `wrangler types`; these keep the control plane readable and typed).
@@ -49,7 +55,7 @@ export default {
     const url = new URL(req.url);
 
     if (url.pathname === "/") {
-      return json({ service: "braid-worker", ok: true, endpoints: ["/api/base", "/api/fork"] });
+      return json({ service: "braid-worker", ok: true, endpoints: ["/api/base", "/api/fork", "/api/resolve"] });
     }
 
     // Step 1: create an empty base repo + a write token so the caller can seed
@@ -87,6 +93,43 @@ export default {
         forks.push({ agent, name: forkName, remote: forked.remote, token: tok.plaintext, expiresAt: tok.expiresAt });
       }
       return json({ base: body.base, forks });
+    }
+
+    // LLM conflict reconciliation via Workers AI (no Anthropic key needed).
+    // The integrator calls this only for a true conflict hunk git couldn't
+    // auto-merge, then re-verifies the result by running the tests.
+    if (url.pathname === "/api/resolve" && req.method === "POST") {
+      const h = (await req.json().catch(() => ({}))) as {
+        path?: string; oursIntent?: string; theirsIntent?: string;
+        base?: string; ours?: string; theirs?: string;
+        contextBefore?: string; contextAfter?: string; lastFailure?: string;
+      };
+      const prompt = [
+        `Resolve a git merge conflict in \`${h.path}\`. Two agents edited the same region:`,
+        `- "ours" implements: ${h.oursIntent}`,
+        `- "theirs" implements: ${h.theirsIntent}`,
+        ``,
+        `Common ancestor (base):\n${h.base ?? ""}`,
+        `Ours:\n${h.ours ?? ""}`,
+        `Theirs:\n${h.theirs ?? ""}`,
+        `Context before:\n${h.contextBefore ?? ""}`,
+        `Context after:\n${h.contextAfter ?? ""}`,
+        h.lastFailure ? `\nPrevious attempt FAILED tests:\n${h.lastFailure}\nFix it.` : "",
+        ``,
+        `Compose BOTH intents into one correct version. Preserve indentation.`,
+        `Return ONLY the replacement code for the conflicted region — no markers, no fences, no prose.`,
+      ].join("\n");
+
+      const out = await env.AI.run(RESOLVE_MODEL, {
+        messages: [
+          { role: "system", content: "You are a precise code-merge assistant. Output only code." },
+          { role: "user", content: prompt },
+        ],
+        max_tokens: 1024,
+      });
+      const raw = (out.response ?? "").trim();
+      const content = raw.replace(/^```[a-z]*\n?/i, "").replace(/\n?```$/i, "");
+      return json({ model: RESOLVE_MODEL, content });
     }
 
     return json({ error: "not found" }, 404);

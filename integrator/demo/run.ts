@@ -3,7 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { readFileSync } from "node:fs";
 import { seed } from "./seed.js";
 import { integrate } from "../src/integrate.js";
-import { UnionResolver, ClaudeResolver, HybridResolver } from "../src/resolver.js";
+import { UnionResolver, HybridResolver, autoLlmResolver } from "../src/resolver.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "../..");
@@ -21,11 +21,11 @@ async function main() {
   const { baseline, agents } = await seed(repoDir);
   for (const a of agents) console.log(`   • ${a.id} [${a.branch}] — ${a.intent}`);
 
-  const claude = new ClaudeResolver();
-  const resolver = new HybridResolver(new UnionResolver(), claude);
+  const llm = autoLlmResolver();
+  const resolver = new HybridResolver(new UnionResolver(), llm);
   banner(
-    `② Integrating with hybrid resolver (deterministic union → Claude on retry: ` +
-      `${claude.available ? "LLM available" : "LLM offline, union only"})…`,
+    `② Integrating with hybrid resolver (deterministic union → ` +
+      `${llm ? llm.name + " on retry" : "union only (no LLM configured)"})…`,
   );
 
   const { mergedSha, trail, green } = await integrate({

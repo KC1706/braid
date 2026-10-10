@@ -27,6 +27,11 @@ export interface Resolver {
   resolve(input: ResolveInput): Promise<ResolveOutput>;
 }
 
+/** A resolver that may be unconfigured (e.g. no key / no endpoint). */
+export interface OptionalResolver extends Resolver {
+  readonly available: boolean;
+}
+
 /** Lines one side added relative to the common ancestor, order preserved. */
 function added(side: string[], base: string[]): string[] {
   const baseCount = new Map<string, number>();
@@ -71,7 +76,54 @@ export class UnionResolver implements Resolver {
  * replacement text; correctness is still decided downstream by re-running the
  * real test suite — the LLM never gets the final word.
  */
-export class ClaudeResolver implements Resolver {
+/**
+ * Resolves a true conflict hunk via Cloudflare Workers AI, called through the
+ * control-plane Worker's /api/resolve endpoint (the AI binding only exists
+ * inside a Worker). No Anthropic key needed — the LLM lives entirely on
+ * Cloudflare. Correctness is still decided by re-running the real tests.
+ */
+export class WorkersAIResolver implements OptionalResolver {
+  readonly name = "workers-ai";
+  private endpoint: string;
+
+  constructor(opts?: { workerUrl?: string }) {
+    const base = opts?.workerUrl ?? process.env.BRAID_WORKER_URL ?? "";
+    this.endpoint = base ? `${base.replace(/\/$/, "")}/api/resolve` : "";
+  }
+
+  get available(): boolean {
+    return this.endpoint.length > 0;
+  }
+
+  async resolve(input: ResolveInput): Promise<ResolveOutput> {
+    if (!this.available) throw new Error("WorkersAIResolver: no BRAID_WORKER_URL configured");
+    const { hunk, path, oursIntent, theirsIntent, lastFailure } = input;
+    const res = await fetch(this.endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        path,
+        oursIntent,
+        theirsIntent,
+        base: hunk.base.join("\n"),
+        ours: hunk.ours.join("\n"),
+        theirs: hunk.theirs.join("\n"),
+        contextBefore: hunk.contextBefore.join("\n"),
+        contextAfter: hunk.contextAfter.join("\n"),
+        lastFailure,
+      }),
+    });
+    if (!res.ok) throw new Error(`Workers AI resolve ${res.status}: ${await res.text()}`);
+    const data = (await res.json()) as { content: string };
+    return {
+      content: data.content,
+      strategy: "llm",
+      rationale: `Workers AI composed "${oursIntent}" with "${theirsIntent}" (re-verified by tests).`,
+    };
+  }
+}
+
+export class ClaudeResolver implements OptionalResolver {
   readonly name = "claude";
   private apiKey: string;
   private model: string;
@@ -147,19 +199,31 @@ export class ClaudeResolver implements Resolver {
 }
 
 /**
- * Tries the deterministic union first; escalates to Claude only when a retry is
- * requested (union broke the tests) and Claude is configured. This is the
- * hybrid policy from the plan: free + deterministic where possible, LLM only at
- * a true overlap that the cheap path couldn't satisfy.
+ * Tries the deterministic union first; escalates to the configured LLM resolver
+ * only when a retry is requested (union broke the tests) and an LLM is
+ * available. This is the hybrid policy from the plan: free + deterministic where
+ * possible, LLM only at a true overlap that the cheap path couldn't satisfy.
  */
 export class HybridResolver implements Resolver {
   readonly name = "hybrid";
-  constructor(private union: UnionResolver, private claude: ClaudeResolver) {}
+  constructor(private union: UnionResolver, private llm?: OptionalResolver) {}
 
   async resolve(input: ResolveInput): Promise<ResolveOutput> {
-    if (input.attempt === 0 || !this.claude.available) {
+    if (input.attempt === 0 || !this.llm?.available) {
       return this.union.resolve(input);
     }
-    return this.claude.resolve(input);
+    return this.llm.resolve(input);
   }
+}
+
+/**
+ * Picks the LLM resolver by what's configured: Claude if ANTHROPIC_API_KEY is
+ * set, else Workers AI if BRAID_WORKER_URL is set, else none (union-only).
+ */
+export function autoLlmResolver(): OptionalResolver | undefined {
+  const claude = new ClaudeResolver();
+  if (claude.available) return claude;
+  const wai = new WorkersAIResolver();
+  if (wai.available) return wai;
+  return undefined;
 }

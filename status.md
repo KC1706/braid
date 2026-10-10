@@ -51,8 +51,12 @@
    run from the local swarm-live.ts script (a faithful stand-in). NOT yet relocated.
 3. Event subscription `cf.artifacts.repo.pushed` → Queue → review Workflow. NOT yet built.
 4. Orchestrator Durable Object (task/agent state + WebSocket) + React dashboard. NOT yet built.
-5. `.dev.vars` with `ANTHROPIC_API_KEY` still ABSENT → ClaudeResolver untested live; conflicts use union path.
-   (Optional `CF_AI_GATEWAY` base URL to route via AI Gateway.)
+5. LLM conflict resolution: **Workers AI path ADDED & verified live** (no Anthropic key needed) —
+   worker `POST /api/resolve` runs `@cf/meta/llama-3.3-70b-instruct-fp8-fast`; integrator has
+   `WorkersAIResolver` + `autoLlmResolver()` (Claude if ANTHROPIC_API_KEY, else Workers AI if
+   BRAID_WORKER_URL, else union-only). Hybrid uses union first, LLM only on retry. `.dev.vars`/
+   `ANTHROPIC_API_KEY` still optional (ClaudeResolver path untested live).
+6. `VERIFY.md` added — full manual step-by-step to verify the whole flow by hand.
 
 ## NEXT STEP (recommended)
 Build the **orchestrator Durable Object + React/WS dashboard** — the demo money-shot visual (live swarm,
@@ -114,6 +118,15 @@ Queue→Workflow. Ask user whether to prioritize dashboard vs Sandbox vs Queue f
 - **Anthropic key still not provided** (.dev.vars absent) — needed for live agent codegen + ClaudeResolver.
 
 ## Change log
+
+### 2026-10-10 — Workers AI resolver + manual verify guide
+- Added Workers AI conflict resolution so NO Anthropic key is needed: worker `POST /api/resolve`
+  (binding `env.AI`, model `@cf/meta/llama-3.3-70b-instruct-fp8-fast`); verified live (returned the
+  correct `validateId; rateLimit; return` composition).
+- integrator: `WorkersAIResolver` (calls `${BRAID_WORKER_URL}/api/resolve`) + `autoLlmResolver()`;
+  `HybridResolver` now takes any optional LLM resolver. demos auto-pick Workers AI. Tests still 4/4.
+- Wrote `VERIFY.md`: detailed by-hand verification of the entire flow (local engine → control plane →
+  Workers AI → full live swarm → independent clone check → dashboard list → cleanup).
 
 ### 2026-10-10 — Day-0 de-risk: auth works, blocked on Workers Paid plan
 - `wrangler login` done; confirmed Artifacts needs Workers Paid (Free → 10004). Resolved the #1 risk

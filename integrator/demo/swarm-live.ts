@@ -3,7 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { gitOk, git } from "../src/git.js";
 import { integrate } from "../src/integrate.js";
-import { UnionResolver, ClaudeResolver, HybridResolver } from "../src/resolver.js";
+import { UnionResolver, HybridResolver, autoLlmResolver } from "../src/resolver.js";
 import { FILES_BASELINE, AGENT_EDITS } from "./seed.js";
 
 /**
@@ -103,8 +103,11 @@ async function main() {
     await gitOk(integ, ["fetch", "-q", f.agent]);
   }
 
-  const claude = new ClaudeResolver();
-  const resolver = new HybridResolver(new UnionResolver(), claude);
+  // Let the LLM path (Workers AI via this same Worker) be available on retry.
+  process.env.BRAID_WORKER_URL ??= WORKER;
+  const llm = autoLlmResolver();
+  console.log(`   resolver: union → ${llm ? llm.name + " on retry" : "union only"}`);
+  const resolver = new HybridResolver(new UnionResolver(), llm);
   const { trail, green } = await integrate({
     repoDir: integ,
     baseline: "main",

@@ -7,5 +7,6 @@
   "artifacts": [
     { "binding": "ARTIFACTS", "namespace": "braid" }
   ],
+  "ai": { "binding": "AI" },
   "observability": { "enabled": true }
 }
