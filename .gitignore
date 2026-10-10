@@ -7,3 +7,4 @@ dist/
 scratch/
 /integrator/.tmp/
 coverage/
+worker/worker-configuration.d.ts

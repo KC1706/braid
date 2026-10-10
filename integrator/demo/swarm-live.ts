@@ -4,6 +4,7 @@ import { mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { gitOk, git } from "../src/git.js";
 import { integrate } from "../src/integrate.js";
 import { UnionResolver, HybridResolver, autoLlmResolver } from "../src/resolver.js";
+import { BraidEmitter } from "../src/events.js";
 import { FILES_BASELINE, AGENT_EDITS } from "./seed.js";
 
 /**
@@ -25,6 +26,9 @@ const tmp = resolve(__dirname, "../.tmp/live");
 
 const WORKER = process.env.BRAID_WORKER_URL ?? "https://braid-worker.kunalchandoa925.workers.dev";
 const AGENTS = ["agent-1", "agent-2", "agent-3"];
+const AGENT_BRANCH: Record<string, string> = { "agent-1": "agent/validation", "agent-2": "agent/ratelimit", "agent-3": "agent/docs" };
+const runId = process.env.BRAID_RUN_ID ?? `live-${Date.now().toString(36)}`;
+const bus = new BraidEmitter(process.env.BRAID_DASHBOARD === "off" ? undefined : WORKER, runId);
 
 function banner(s: string) {
   console.log(`\n\x1b[1m\x1b[36m${s}\x1b[0m`);
@@ -65,10 +69,19 @@ async function main() {
   mkdirSync(tmp, { recursive: true });
   const run = Date.now().toString(36);
 
+  bus.emit({
+    type: "run:init",
+    task: "Add input validation and a rate limiter to the /users route.",
+    mode: "live",
+    agents: AGENTS.map((id) => ({ id, branch: `${AGENT_BRANCH[id]}`, intent: AGENT_EDITS[id].intent })),
+  });
+  if (bus.dashboardUrl) banner(`📺 Live dashboard: ${bus.dashboardUrl}`);
+
   banner(`① Creating a real Artifacts base repo via ${WORKER}…`);
   const base = await post("/api/base", { name: `braid-live-${run}` });
   console.log(`   base repo: ${base.name}`);
   console.log(`   remote   : ${base.remote}`);
+  bus.emit({ type: "base:ready", name: base.name, remote: base.remote });
 
   banner("② Seeding the base repo with the Hono baseline app (real git push)…");
   await initCommitPush(join(tmp, "base-seed"), FILES_BASELINE, authRemote(base.remote, base.token), "baseline: Hono /users API");
@@ -76,12 +89,16 @@ async function main() {
 
   banner("③ Forking the base once per agent (real Artifacts forks)…");
   const { forks } = await post("/api/fork", { base: base.name, agents: AGENTS });
-  for (const f of forks) console.log(`   • ${f.agent} → ${f.name}`);
+  for (const f of forks) {
+    console.log(`   • ${f.agent} → ${f.name}`);
+    bus.emit({ type: "agent:status", agent: f.agent, status: "forked", detail: f.name });
+  }
 
   banner("④ Each agent edits its fork and pushes (2 collide on getUser)…");
   for (const f of forks) {
     const edit = AGENT_EDITS[f.agent];
     const dir = join(tmp, f.agent);
+    bus.emit({ type: "agent:status", agent: f.agent, status: "coding", detail: edit.intent });
     await gitOk(tmp, ["clone", "-q", authRemote(f.remote, f.token), dir]);
     await gitOk(dir, ["config", "user.email", "braid@example.com"]);
     await gitOk(dir, ["config", "user.name", f.agent]);
@@ -93,6 +110,7 @@ async function main() {
     await gitOk(dir, ["commit", "-q", "-m", `${f.agent}: ${edit.intent}`]);
     await gitOk(dir, ["push", "origin", "HEAD:main"]);
     console.log(`   ✓ ${f.agent} pushed "${edit.intent}" to its fork`);
+    bus.emit({ type: "agent:status", agent: f.agent, status: "pushed", detail: "pushed to fork" });
   }
 
   banner("⑤ Integrator: clone base, fetch every fork, merge + re-test…");
@@ -116,6 +134,7 @@ async function main() {
     resolver,
     verifyOptions: { nodeModules },
     log: (m) => console.log(m),
+    onEvent: (e) => bus.emit(e),
   });
 
   banner("⑥ Pushing the merged, test-green result back to base/main…");
@@ -123,7 +142,17 @@ async function main() {
   console.log("   ✓ merged result pushed");
 
   banner("⑦ Merged src/users.ts (both features survive, from the real base repo):");
-  console.log(readFileSync(join(integ, "src/users.ts"), "utf8").trimEnd());
+  const usersFile = readFileSync(join(integ, "src/users.ts"), "utf8").trimEnd();
+  console.log(usersFile);
+
+  bus.emit({
+    type: "run:done",
+    green,
+    finalTest: trail.finalTest,
+    mergedSha: trail.mergedSha,
+    summary: trail.summary,
+    usersFile,
+  });
 
   banner("⑧ Result");
   console.log(`   base repo   : ${base.name}`);
@@ -133,10 +162,13 @@ async function main() {
   console.log(`   final test  : ${trail.finalTest}`);
   console.log(`   status      : ${green ? "\x1b[32mGREEN ✅\x1b[0m" : "\x1b[31mRED ❌\x1b[0m"}`);
   console.log(`\n   inspect: git -c http.extraHeader="Authorization: Bearer <token>" clone ${base.remote}`);
+  if (bus.dashboardUrl) console.log(`   dashboard  : ${bus.dashboardUrl}`);
+  await bus.flush();
   if (!green) process.exit(1);
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   console.error("\x1b[31mLive swarm failed:\x1b[0m", err);
+  await bus.flush();
   process.exit(1);
 });

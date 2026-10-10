@@ -5,6 +5,7 @@ import { parseConflicts, applyResolutions } from "./conflict.js";
 import type { Resolver } from "./resolver.js";
 import { verify, type VerifyOptions } from "./verify.js";
 import type { Trail, ConflictRecord, AgentMergeRecord } from "./trail.js";
+import type { BraidEvent } from "./events.js";
 
 export interface AgentInput {
   id: string;
@@ -22,6 +23,8 @@ export interface IntegrateOptions {
   verifyOptions: VerifyOptions;
   maxRetries?: number;
   log?: (msg: string) => void;
+  /** Optional structured-event sink (streams the live dashboard). */
+  onEvent?: (event: BraidEvent) => void;
 }
 
 export interface IntegrateResult {
@@ -51,6 +54,7 @@ export async function integrate(opts: IntegrateOptions): Promise<IntegrateResult
   } = opts;
   const integrationBranch = opts.integrationBranch ?? "braid/integration";
   const log = opts.log ?? (() => {});
+  const emit = opts.onEvent ?? (() => {});
 
   await gitOk(repoDir, ["config", "merge.conflictStyle", "diff3"]);
   await gitOk(repoDir, ["checkout", "-B", integrationBranch, baseline]);
@@ -63,6 +67,7 @@ export async function integrate(opts: IntegrateOptions): Promise<IntegrateResult
   for (const agent of agents) {
     const parent = await currentSha(repoDir);
     log(`\n▶ merging ${agent.id} (${agent.branch}) — intent: "${agent.intent}"`);
+    emit({ type: "merge:start", agent: agent.id });
 
     const merge = await git(repoDir, [
       "merge",
@@ -85,8 +90,10 @@ export async function integrate(opts: IntegrateOptions): Promise<IntegrateResult
       // Clean, deterministic auto-merge — git already created the commit.
       record.autoMergedFiles = await changedFiles(repoDir, parent, "HEAD");
       log(`  ✓ git auto-merged ${record.autoMergedFiles.length} file(s) — no AI needed`);
+      emit({ type: "merge:auto", agent: agent.id, files: record.autoMergedFiles });
     } else {
       log(`  ⚡ ${conflicted.length} file(s) conflicted — resolving true overlaps`);
+      emit({ type: "conflict:detected", agent: agent.id, files: conflicted });
       const oursIntent = integratedIntents.join(" + ") || baseline;
 
       for (const file of conflicted) {
@@ -100,6 +107,7 @@ export async function integrate(opts: IntegrateOptions): Promise<IntegrateResult
           maxRetries,
           conflicts,
           log,
+          emit,
         });
       }
 
@@ -119,6 +127,7 @@ export async function integrate(opts: IntegrateOptions): Promise<IntegrateResult
     const v = await verify(repoDir, verifyOptions);
     record.testResult = v.summary;
     log(`  ${v.passed ? "✅" : "❌"} ${v.summary}`);
+    emit({ type: "verify", scope: agent.id, passed: v.passed, summary: v.summary });
     if (!v.passed) {
       // A clean auto-merge that still breaks tests: surface it honestly.
       throw new Error(
@@ -132,6 +141,7 @@ export async function integrate(opts: IntegrateOptions): Promise<IntegrateResult
 
   const mergedSha = await currentSha(repoDir);
   const finalVerify = await verify(repoDir, verifyOptions);
+  emit({ type: "verify", scope: "final", passed: finalVerify.passed, summary: finalVerify.summary });
 
   const trail: Trail = {
     task,
@@ -168,6 +178,7 @@ interface ResolveFileArgs {
   maxRetries: number;
   conflicts: ConflictRecord[];
   log: (msg: string) => void;
+  emit: (event: BraidEvent) => void;
 }
 
 /**
@@ -176,7 +187,7 @@ interface ResolveFileArgs {
  * maxRetries. The resolver (hybrid) escalates to the LLM on retry.
  */
 async function resolveFileWithRetries(a: ResolveFileArgs): Promise<void> {
-  const { repoDir, file, oursIntent, agent, resolver, verifyOptions, maxRetries, conflicts, log } = a;
+  const { repoDir, file, oursIntent, agent, resolver, verifyOptions, maxRetries, conflicts, log, emit } = a;
   const abs = join(repoDir, file);
   const conflictedContent = readFileSync(abs, "utf8");
   const hunks = parseConflicts(conflictedContent);
@@ -196,6 +207,7 @@ async function resolveFileWithRetries(a: ResolveFileArgs): Promise<void> {
         }),
       );
     }
+    emit({ type: "conflict:attempt", agent: agent.id, path: file, attempt: attempt + 1, strategy: outputs[0]?.strategy ?? "?" });
     const resolved = applyResolutions(conflictedContent, outputs.map((o) => o.content));
     writeFileSync(abs, resolved);
     await gitOk(repoDir, ["add", file]);
@@ -221,6 +233,14 @@ async function resolveFileWithRetries(a: ResolveFileArgs): Promise<void> {
         `    ✓ ${file}: ${hunks.length} hunk(s) via ${outputs[0]?.strategy ?? "?"} ` +
           `(attempt ${attempt + 1}) — ${v.summary}`,
       );
+      emit({
+        type: "conflict:resolved",
+        agent: agent.id,
+        path: file,
+        strategy: outputs[0]?.strategy ?? "?",
+        attempts: attempt + 1,
+        verified: v.summary,
+      });
       return;
     }
     lastFailure = v.output;

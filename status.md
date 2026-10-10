@@ -14,12 +14,15 @@
 - [x] Day 0 — de-risk: Artifacts auth + push — ✅ PROVEN live (Bearer header & basic-auth URL both work)
 - [x] Day 1 — swarm: fork N + agents push divergent branches — ✅ PROVEN live via control-plane Worker
 - [x] Day 2 — integrator (git merge + conflict resolver + re-test loop) — ✅ DONE, TESTED, run live
-- [ ] Day 3 — review Workflow + live dashboard — NOT STARTED (highest demo value next)
+- [~] Day 3 — live dashboard + orchestrator DO — ✅ DONE & DEPLOYED; review Workflow still TODO
 - [~] Day 4 — README + MIT license done; video + submit still to do
 
 ## HOW TO RESUME (run these)
-- Local demo (no cloud): `npm install` then `npm -w integrator run demo`
-- Full swarm on REAL Artifacts: `npm -w integrator run swarm:live`  (uses deployed worker)
+- **Live dashboard:** https://braid-worker.kunalchandoa925.workers.dev/  (money-shot visual)
+- Local demo (no cloud) + live dashboard: `npm -w integrator run demo` → prints a
+  `…/?run=<id>` URL; open it to watch the swarm stream live (events go to the deployed DO).
+  Disable streaming with `BRAID_DASHBOARD=off`.
+- Full swarm on REAL Artifacts (also streams to dashboard): `npm -w integrator run swarm:live`
 - All tests: `npm test`  (baseline 2 + integrator 4)
 - Worker: `cd worker && npx wrangler deploy` → https://braid-worker.kunalchandoa925.workers.dev
 
@@ -62,7 +65,15 @@
 2. Agent compute inside Workers via isomorphic-git (needs a MemoryFS class, see docs example). Currently agents
    run from the local swarm-live.ts script (a faithful stand-in). NOT yet relocated.
 3. Event subscription `cf.artifacts.repo.pushed` → Queue → review Workflow. NOT yet built.
-4. Orchestrator Durable Object (task/agent state + WebSocket) + React dashboard. NOT yet built.
+4. Orchestrator Durable Object (task/agent state + WebSocket) + dashboard. ✅ BUILT & DEPLOYED
+   (2026-10-10). DO `Orchestrator` in `worker/src/index.ts` (one instance per run id via
+   `idFromName`); ingests structured events (`POST /runs/:id/event`), reduces them to one live
+   state snapshot (persisted, survives hibernation), fans out over WebSocket (`/runs/:id/ws`).
+   Dashboard = zero-build static page `dashboard/public/index.html`, served by the worker via
+   static assets (`ASSETS` binding). Both demos stream to it via `integrator/src/events.ts`
+   (`BraidEmitter`) + an optional `onEvent` hook in `integrate()`. Verified end-to-end live
+   (WS snapshot replay to late joiners works). NOTE: it's vanilla HTML/JS, not React (simpler to
+   deploy, no build step) — same money-shot visual. STILL TODO: push→Queue→review Workflow (#3).
 5. LLM conflict resolution: **Workers AI path ADDED & verified live** (no Anthropic key needed) —
    worker `POST /api/resolve` runs `@cf/meta/llama-3.3-70b-instruct-fp8-fast`; integrator has
    `WorkersAIResolver` + `autoLlmResolver()` (Claude if ANTHROPIC_API_KEY, else Workers AI if
@@ -71,13 +82,14 @@
 6. `VERIFY.md` added — full manual step-by-step to verify the whole flow by hand.
 
 ## NEXT STEP (user to choose)
-Two strong options — ASK the user which to prioritize:
-1. **Real LLM agents** — make agents actually WRITE their code via Workers AI (new worker endpoint
+Dashboard + orchestrator DO = ✅ DONE (2026-10-10). Remaining strong options:
+1. **Record the demo video + submit** — the pipeline + live dashboard are the money shot; this is
+   now a complete, compelling submission. Highest-leverage use of remaining time before 2026-10-14.
+2. **Real LLM agents** — make agents actually WRITE their code via Workers AI (new worker endpoint
    `/api/codegen` given fork code + intent → new files), replacing `AGENT_EDITS`. Makes the "swarm of
-   real agents" story fully true end-to-end. (User was asked this at end of last session.)
-2. **Dashboard + orchestrator Durable Object** — the demo money-shot visual (live swarm, diverging
-   branches, conflict resolving, trail panel); needed for the 5–10 min video.
-Then: optionally move integrator into a Sandbox, wire push→Queue→Workflow, Workers Builds preview URL.
+   real agents" story fully true end-to-end.
+3. **CF-native plumbing** — move integrator into a Sandbox; wire push→Queue→review Workflow;
+   Workers Builds preview URL. More infra than demo payoff.
 Reminder: `.dev.vars` ANTHROPIC_API_KEY optional (Workers AI already covers LLM, no key needed).
 
 ---
@@ -135,6 +147,30 @@ Reminder: `.dev.vars` ANTHROPIC_API_KEY optional (Workers AI already covers LLM,
 - **Anthropic key still not provided** (.dev.vars absent) — needed for live agent codegen + ClaudeResolver.
 
 ## Change log
+
+### 2026-10-10 — live dashboard + orchestrator Durable Object (the money shot)
+- **Worker: `Orchestrator` Durable Object** (`worker/src/index.ts`) — one instance per run id
+  (`env.ORCHESTRATOR.idFromName(runId)`). `POST /runs/:id/event` ingests structured events →
+  pure `reduce()` folds them into one `RunState` snapshot → persisted to DO storage (survives
+  hibernation) → broadcast as `{type:"state",state}` to all WS clients. `GET /runs/:id/ws`
+  (hibernation API: `acceptWebSocket`, sends snapshot on connect) · `GET /runs/:id/state` (poll) ·
+  `POST /runs/:id/reset`. Service JSON moved from `/` to `/api`.
+- **wrangler.jsonc:** added `durable_objects` binding + `migrations` (`new_sqlite_classes`) +
+  `assets` binding (`../dashboard/public`). Deployed; version be515bab.
+- **Dashboard:** `dashboard/public/index.html` — zero-build static page served by the worker.
+  Dark UI: agent swim lanes (spawned→forked→coding→pushed + merge status), live conflict-resolution
+  panel (union vs llm tags, attempts, resolving/resolved), provenance trail (4 stat tiles + final
+  test + merged sha + merged users.ts), activity log. Reconnecting WS; `?run=<id>` selects the run;
+  manual run-id entry if absent. Renders purely from the server snapshot (no client-side reducer).
+- **Instrumentation:** `integrator/src/events.ts` (`BraidEmitter` best-effort fire-and-forget POST,
+  `BraidEvent` union) + optional `onEvent` hook threaded through `integrate()` (emits merge:start,
+  merge:auto, conflict:detected/attempt/resolved, verify). Both `demo/run.ts` (local, mode="local")
+  and `demo/swarm-live.ts` (live, mode="live") create a run id, emit run:init→agent:status→…→run:done,
+  and print the dashboard URL. Local demo streams to the DEPLOYED DO → dashboard lights up with NO
+  local cloud. `BRAID_DASHBOARD=off` disables; `BRAID_RUN_ID` pins the id.
+- **Verified live end-to-end:** ran `demo`, polled `/runs/:id/state` (3 agents, getUser conflict
+  resolved via union, final GREEN, usersFile present), and a real WS client received the full
+  snapshot on connect (late-joiner replay works). Tests still 4/4. Page serves 200 at `/`.
 
 ### 2026-10-10 — Workers AI resolver + manual verify guide
 - Added Workers AI conflict resolution so NO Anthropic key is needed: worker `POST /api/resolve`

@@ -32,6 +32,13 @@ npm install
 npm run demo      # seeds a baseline + 3 agent forks, then integrates them
 ```
 
+The demo also prints a **live dashboard** URL (`…/?run=<id>`) — open it to watch the swarm stream
+in real time: agent lanes filling, the `getUser()` conflict detected and resolved, the provenance
+trail, and the final green banner. Events flow to an **Orchestrator Durable Object** (deployed) over
+HTTP and fan out to the browser over WebSocket, so the local demo lights up the hosted dashboard with
+no cloud of its own. Dashboard home: <https://braid-worker.kunalchandoa925.workers.dev/>
+(`BRAID_DASHBOARD=off` to disable streaming).
+
 The demo reproduces the worked example: three agents fork one Hono API —
 
 - **agent-1** adds input validation (edits `getUser()`, adds `validate.ts`)
@@ -94,9 +101,9 @@ re-resolve with the failure fed back, bounded retries.
 |---|---|
 | `baseline/` — Hono `/users` API + real vitest suite (the fork target & test gate) | ✅ done |
 | `integrator/` — hybrid merge engine: git 3-way + resolver + re-test loop + trail | ✅ done, tested |
-| `worker/` — control plane: DO orchestrator, forks, queue consumer, WS | ⏳ scaffold next (needs Cloudflare creds) |
-| `agent/` — per-fork Claude codegen + isomorphic-git push | ⏳ next (needs AI Gateway + Artifacts) |
-| `dashboard/` — live swarm / diverging branches / trail panel | ⏳ next |
+| `worker/` — control plane: Artifacts fork/token provisioning + Workers AI resolver + `Orchestrator` DO (event ingest → reduce → WebSocket fan-out) | ✅ deployed |
+| `dashboard/` — live swarm / diverging branches / conflict + trail panel | ✅ deployed (served by the worker) |
+| `agent/` — per-fork LLM codegen + isomorphic-git push (agents are scripted today) | ⏳ next (Workers AI `/api/codegen`) |
 
 ## Repo layout
 
@@ -105,9 +112,10 @@ baseline/     demo Hono app the swarm forks; its tests are the acceptance gate
 integrator/   the hybrid merge engine (git + resolver + verify + trail)  ← the star
   src/        git.ts conflict.ts resolver.ts verify.ts integrate.ts trail.ts
   demo/       seed.ts (fixture) + run.ts (the money-shot demo)
-agent/        (planned) agent loop: Claude via AI Gateway → push
-worker/       (planned) DO orchestrator + queue + API
-dashboard/    (planned) React + WebSocket live view
+  src/events.ts  BraidEmitter + event union streamed to the orchestrator DO
+agent/        (planned) agent loop: LLM codegen → push
+worker/       control plane: Artifacts provisioning + Workers AI resolver + Orchestrator DO (WebSocket)
+dashboard/    public/index.html — zero-build live view, served by the worker via static assets
 ```
 
 ## Running against real Cloudflare (requires credentials)

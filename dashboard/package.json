@@ -1,0 +1,9 @@
+{
+  "name": "@braid/dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Braid live swarm dashboard — static page served by the worker (Durable Object WebSocket feed).",
+  "scripts": {
+    "note": "echo 'Static page in public/ — deployed via worker static assets (cd ../worker && npm run deploy).'"
+  }
+}
