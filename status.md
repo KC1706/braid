@@ -3,12 +3,13 @@
 > Cross-session memory. Update this at the end of every work session: what changed, what's next,
 > what's blocked. Newest entry on top. See `plan.md` for the full plan.
 
-**Deadline:** 2026-10-14 · **Today:** 2026-10-10 · **Phase:** FULL PIPELINE PROVEN on real Artifacts
+**Deadline:** 2026-10-14 · **Today:** 2026-10-11 · **Phase:** PIPELINE + LIVE DASHBOARD DEPLOYED
 
 > **TL;DR for a fresh session:** The core thesis (swarm of agents → test-verified hybrid merge) is
-> BUILT and PROVEN end-to-end on real Cloudflare Artifacts. We effectively finished Day 0/1/2. What's
-> left is demo polish + leaning into CF primitives (dashboard, Sandbox/Worker compute, Queue→Workflow).
-> Nothing left is high-risk. A legitimate working submission already exists.
+> BUILT and PROVEN end-to-end on real Cloudflare Artifacts, AND it now has a deployed live dashboard
+> (orchestrator Durable Object + WebSocket). Days 0/1/2/3 effectively done. What's left is the demo
+> video + submit, optionally real-LLM agents and CF plumbing (Sandbox/Queue/Workflow). Nothing left
+> is high-risk. A legitimate, visually compelling working submission already exists and is deployed.
 
 ## Quick state
 - [x] Day 0 — de-risk: Artifacts auth + push — ✅ PROVEN live (Bearer header & basic-auth URL both work)
@@ -25,9 +26,15 @@
 - Full swarm on REAL Artifacts (also streams to dashboard): `npm -w integrator run swarm:live`
 - All tests: `npm test`  (baseline 2 + integrator 4)
 - Worker: `cd worker && npx wrangler deploy` → https://braid-worker.kunalchandoa925.workers.dev
+- **Test the dashboard:** open the home URL, type a run id (e.g. `test1`) in the run-id box → Watch,
+  THEN run `BRAID_RUN_ID=test1 npm -w integrator run demo` (open first so you see it animate; the
+  local demo finishes in seconds). `swarm:live` animates longer (real forks/pushes). Snapshot without
+  a browser: `curl …/runs/<id>/state`. Local-only: `cd worker && npx wrangler dev` then point the demo
+  at it with `BRAID_WORKER_URL=http://localhost:8787`. Working = conn pill green, 3 lanes, agent-2
+  conflict→resolved (union tag), trail tiles `3/4/2/0`, green banner.
 
 ## KEY FACTS (don't re-derive)
-- **GitHub:** `KC1706/braid` (PRIVATE). Pushed through commit `de62228`. User WANTS frequent commits/pushes
+- **GitHub:** `KC1706/braid` (PRIVATE). Pushed through commit `be13ea2` (dashboard + DO). User WANTS frequent commits/pushes
   (for their contribution graph) — commit+push after each meaningful chunk. Attribution line in use:
   `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
 - **Account:** Workers PAID (user upgraded). Account ID `06bff0b64288392a55e653c32310fc63`.
