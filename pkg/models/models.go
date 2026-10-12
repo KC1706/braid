@@ -41,6 +41,20 @@ type LadderResult struct {
 	Rungs   []RungResult `json:"rungs"`
 }
 
+// ConflictHunk is one diff3 conflict region, shared data between the merge
+// driver (which parses it) and the resolver (which composes it). The base region
+// — present only with merge.conflictStyle=diff3 — is what lets Braid do a precise
+// 3-way union instead of a blind pick.
+type ConflictHunk struct {
+	OursLabel     string
+	TheirsLabel   string
+	Ours          []string
+	Base          []string
+	Theirs        []string
+	ContextBefore []string // a few lines immediately before the hunk, for resolver context
+	ContextAfter  []string // a few lines immediately after the hunk
+}
+
 // Candidate is one agent's proposed content for a conflicted hunk.
 type Candidate struct {
 	Agent   string `json:"agent"`

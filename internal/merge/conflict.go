@@ -6,11 +6,15 @@ package merge
 import (
 	"regexp"
 	"strings"
+
+	"github.com/KC1706/braid/pkg/models"
 )
 
-// ConflictHunk is one diff3 conflict region. The base region (present only with
-// merge.conflictStyle=diff3) is what lets Braid do a precise 3-way union instead
-// of a blind pick.
+// ConflictHunk is one diff3 conflict region. It is an alias for
+// models.ConflictHunk, which lives in the shared-types package so the resolver
+// can consume it without an import cycle (merge → resolver → merge). The base
+// region (present only with merge.conflictStyle=diff3) is what lets Braid do a
+// precise 3-way union instead of a blind pick.
 //
 //	<<<<<<< ours
 //	...ours...
@@ -19,16 +23,7 @@ import (
 //	=======
 //	...theirs...
 //	>>>>>>> theirs
-type ConflictHunk struct {
-	OursLabel   string
-	TheirsLabel string
-	Ours        []string
-	Base        []string
-	Theirs      []string
-	// A few lines immediately before/after the hunk, for resolver context.
-	ContextBefore []string
-	ContextAfter  []string
-}
+type ConflictHunk = models.ConflictHunk
 
 var (
 	reOurs   = regexp.MustCompile(`^<<<<<<< (.*)$`)
