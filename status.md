@@ -158,20 +158,36 @@ Reminder: `.dev.vars` ANTHROPIC_API_KEY optional (Workers AI already covers LLM,
 
 ## Change log
 
-### 2026-10-12 — Go brain port: §5 steps 1–3 done (models, policy, conflict, ladder)
-- Executing `GO_MIGRATION_PLAN.md` §5. Done + pushed (each a commit, `go test ./...` green):
-  - **§5.1 `pkg/models` + `internal/policy`** — shared types (Verdict/RungResult/LadderResult/
-    Trail/Event/Emitter; JSON tags mirror TS camelCase so trail.json stays edge/dashboard-compatible)
-    + incompatibility policy (EscalatePolicy default / PickWinnerPolicy opt-in). Port of trail.ts +
-    ladder.ts types + policy.ts.
-  - **§5.2 `internal/merge/conflict.go`** — diff3 ParseConflicts + ApplyResolutions (port of conflict.ts).
+### 2026-10-12 — Go brain port COMPLETE: `GO_MIGRATION_PLAN.md` §5 steps 1–7 all done
+- The whole TS "brain" is ported to Go (`internal/{merge,ladder,resolver,semantic,policy}`,
+  `pkg/models`), at behavior parity. Each step its own commit, all pushed, `go test ./...` green
+  throughout (47 Go test funcs — finer-grained than the 24 TS tests, same behaviors covered).
+  - **§5.1 `pkg/models` + `internal/policy`** — shared types (Verdict/RungResult/LadderResult/Trail/
+    Event/Emitter + ConflictHunk; JSON tags mirror TS camelCase so trail.json stays edge/dashboard-
+    compatible) + incompatibility policy (EscalatePolicy default / PickWinnerPolicy opt-in).
+  - **§5.2 `internal/merge/conflict.go`** — diff3 ParseConflicts + ApplyResolutions.
   - **§5.3 `internal/ladder`** — Verifier seam + Ladder.Run (cheapest-first, short-circuit): Rung 1
-    StructuralGuards (C2), Rung 2 GoBuildVerifier `go build/vet` (catches C1 as a compile error),
-    Rung 4 GoTestVerifier `go test -json`. CountTestFuncs is regex-based (judges unparseable trees);
-    t.Skip() gap noted. Fixture = temp-dir git repo + nested Go module.
-- **NEXT = `GO_MIGRATION_PLAN.md` §5 step 4** (`internal/semantic`: GoAnalyzer, SemanticConflicts via
-  build-diag+AST, InferRename, RepairRename — sort all outputs), then §5.5 resolver, §5.6 integrate
-  loop + seed fixtures → 24-test parity, §5.7 cmd/braid demo. `hackathon/` stays frozen.
+    StructuralGuards (C2), Rung 2 GoBuildVerifier `go build/vet` (a clean-but-broken cross-pkg ref is
+    a compile error → robustly catches C1), Rung 4 GoTestVerifier `go test -json`. CountTestFuncs is
+    regex-based (judges unparseable trees); t.Skip() gap noted (Keploy coverage closes it later).
+  - **§5.4 `internal/semantic`** — Analyzer seam (multi-lang-ready, C22); GoAnalyzer (Exports/Imports/
+    PackageExports/ImportPathFor via go/ast); SemanticConflicts (attributes from `go build` diagnostics);
+    InferRename/InferRenameAcross (unambiguous rename only; refuses deletions); RepairRename (selector
+    rewrite a.Old→a.New via go/ast positions + text splice — the Go repair primitive, §1.3).
+  - **§5.5 `internal/resolver`** — UnionResolver (deterministic, parity with TS union output) +
+    WorkersAIResolver/ClaudeResolver (HTTP) + HybridResolver (union→LLM on retry) + AutoLLMResolver.
+  - **§5.6 `internal/merge/integrate.go`** — the loop: per-agent merge, conflict resolve-with-retries,
+    verifyWithSemanticRepair (build-only failure → rename-repair → re-verify, bounded), incompatibility
+    abort/reset + policy, writes .braid/trail.json. Tests mirror the TS integrate/incompatible/
+    semantic-repair suites (3-agent compose-green, clean-but-broken rename→green, escalate+pick-winner).
+  - **§5.7 `cmd/braid demo` + `internal/demo`** — seeds a Go net/http /users fixture (3 agents,
+    getUser conflict) and integrates; `braid demo` prints verdict + trail summary. Verified: swarm
+    composes 3 agents GREEN (agent-2 conflict via union, 2/2 tests pass).
+- **NEXT = post-brain phases (own plans):** migrate `pkg/verify` (Keploy — sever Mongo ReportDB/zap/
+  ai-service; pull coverage forward to replace the static test counter), migrate `pkg/provenance`
+  (Entire), rebuild the thin TS `edge/` against the Go core, then delete the old root TS workspaces
+  (`baseline/ integrator/ worker/ dashboard/` — the frozen `hackathon/` snapshot preserves them).
+  `hackathon/` stays frozen and must not be modified. See `braid-production-direction` memory.
 
 ### 2026-10-12 — DIRECTION CHANGE: production Go rewrite; froze hackathon snapshot
 - **Decision (user):** Braid is a **production** build, not just a hackathon demo. The whole thing is
