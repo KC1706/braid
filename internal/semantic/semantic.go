@@ -239,6 +239,70 @@ func InferRename(baseSrc, nowSrc, missing string) (newName string, ok bool) {
 	return "", false
 }
 
+// PackageExports unions the exported identifiers across a package's source
+// files. Unparseable files are skipped (left to the build rung); a package spans
+// several files, so a rename is only visible at the package level.
+func (a GoAnalyzer) PackageExports(srcs []string) ExportSet {
+	seen := map[string]bool{}
+	for _, src := range srcs {
+		es, err := a.Exports(src)
+		if err != nil {
+			continue
+		}
+		for _, n := range es.Names {
+			seen[n] = true
+		}
+	}
+	return ExportSet{Names: sortedKeys(seen)}
+}
+
+// InferRenameAcross is InferRename at package granularity: given all of a target
+// package's source files at the baseline and now, it returns the new name iff the
+// package dropped exactly the missing symbol and gained exactly one new export.
+func InferRenameAcross(baseSrcs, nowSrcs []string, missing string) (newName string, ok bool) {
+	var a GoAnalyzer
+	base := a.PackageExports(baseSrcs)
+	now := a.PackageExports(nowSrcs)
+	if !base.Has(missing) || now.Has(missing) {
+		return "", false
+	}
+	var added, removed []string
+	for _, n := range now.Names {
+		if !base.Has(n) {
+			added = append(added, n)
+		}
+	}
+	for _, n := range base.Names {
+		if !now.Has(n) {
+			removed = append(removed, n)
+		}
+	}
+	if len(added) == 1 && len(removed) == 1 && removed[0] == missing {
+		return added[0], true
+	}
+	return "", false
+}
+
+// ImportPathFor returns the import path referenced through local package name
+// pkgName in the given source file, or "" if none matches.
+func (GoAnalyzer) ImportPathFor(src, pkgName string) string {
+	f, err := parse(src)
+	if err != nil {
+		return ""
+	}
+	for _, imp := range f.Imports {
+		path, _ := strconv.Unquote(imp.Path.Value)
+		name := lastPathElem(path)
+		if imp.Name != nil {
+			name = imp.Name.Name
+		}
+		if name == pkgName {
+			return path
+		}
+	}
+	return ""
+}
+
 // RepairRename rewrites every call site `<pkg>.<old>` to `<pkg>.<new>` across the
 // Go files in repoDir, in files that import a package whose local name is pkg.
 // This is the Go repair primitive (selector rewrite, not an import alias). It

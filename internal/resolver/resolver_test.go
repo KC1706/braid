@@ -6,31 +6,21 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/KC1706/braid/internal/merge"
 	"github.com/KC1706/braid/pkg/models"
 )
 
 // The canonical getUser hunk from the TS suite: both sides add a distinct line
-// before the shared `return db.find(id);`.
-const sample = `export function getUser(id) {
-<<<<<<< ours
-  validateId(id);
-  return db.find(id);
-||||||| base
-  return db.find(id);
-=======
-  rateLimit(id);
-  return db.find(id);
->>>>>>> theirs
-}`
-
-func sampleHunk(t *testing.T) models.ConflictHunk {
-	t.Helper()
-	hs := merge.ParseConflicts(sample)
-	if len(hs) != 1 {
-		t.Fatalf("want 1 hunk, got %d", len(hs))
+// before the shared `return db.find(id);`. Built inline (not via merge.Parse-
+// Conflicts) so the resolver package stays a leaf — merge imports resolver, so
+// importing merge here would be a test-time import cycle.
+func sampleHunk(_ *testing.T) models.ConflictHunk {
+	return models.ConflictHunk{
+		OursLabel:   "ours",
+		TheirsLabel: "theirs",
+		Ours:        []string{"  validateId(id);", "  return db.find(id);"},
+		Base:        []string{"  return db.find(id);"},
+		Theirs:      []string{"  rateLimit(id);", "  return db.find(id);"},
 	}
-	return hs[0]
 }
 
 func TestUnionResolverKeepsBothAdditions(t *testing.T) {
