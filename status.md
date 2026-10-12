@@ -183,6 +183,16 @@ Reminder: `.dev.vars` ANTHROPIC_API_KEY optional (Workers AI already covers LLM,
   aren't tracked.
 - **NEXT:** stand up the Go module skeleton (`go.mod`, `cmd/braid`, `internal/*`, `pkg/*`) + CI, then
   begin porting the brain (`gitx` → `merge` → `ladder` → `resolver` → `policy` → `semantic`).
+- **✅ Go skeleton DONE** (commit `42ff2b5`): module `github.com/KC1706/braid` (Go 1.26), `cmd/braid`,
+  `pkg/gitx` ported + tested, CI (`.github/workflows/go.yml`), `ARCHITECTURE.md`.
+- **📋 REVIEWED EXECUTION PLAN for the brain port → `GO_MIGRATION_PLAN.md`** (read this to resume).
+  Pure-Go semantic (no cgo/tree-sitter). Key reviewer corrections baked in: Go semantic detection folds
+  into a **build/typecheck rung (Rung 2)**; Rung 3 becomes attribute+repair; repair = **selector
+  rewrite** `a.Old→a.New` (Go has no import alias); static `func Test` counter is weak vs `t.Skip()`
+  (real guard = Keploy coverage later); use `go test -json`; **sort all map-derived output** for
+  determinism; fixtures in `t.TempDir()`; Go-targets-only for now (multi-lang via `Analyzer` iface +
+  Keploy later). **NEXT = `GO_MIGRATION_PLAN.md` §5 step 1** (`pkg/models` + `internal/policy`), then
+  down the list to 24-test parity, committing each sub-chunk.
 
 ### 2026-10-12 — Phase 1 chunk 4: Rung 3 AUTO-FIX — detect→resolve (fully closes C1)
 - Turns Rung 3 from "detect and fail honestly" into "detect and RESOLVE" (the §5.1 intent: "force that
