@@ -158,6 +158,21 @@ Reminder: `.dev.vars` ANTHROPIC_API_KEY optional (Workers AI already covers LLM,
 
 ## Change log
 
+### 2026-10-12 — Go brain port: §5 steps 1–3 done (models, policy, conflict, ladder)
+- Executing `GO_MIGRATION_PLAN.md` §5. Done + pushed (each a commit, `go test ./...` green):
+  - **§5.1 `pkg/models` + `internal/policy`** — shared types (Verdict/RungResult/LadderResult/
+    Trail/Event/Emitter; JSON tags mirror TS camelCase so trail.json stays edge/dashboard-compatible)
+    + incompatibility policy (EscalatePolicy default / PickWinnerPolicy opt-in). Port of trail.ts +
+    ladder.ts types + policy.ts.
+  - **§5.2 `internal/merge/conflict.go`** — diff3 ParseConflicts + ApplyResolutions (port of conflict.ts).
+  - **§5.3 `internal/ladder`** — Verifier seam + Ladder.Run (cheapest-first, short-circuit): Rung 1
+    StructuralGuards (C2), Rung 2 GoBuildVerifier `go build/vet` (catches C1 as a compile error),
+    Rung 4 GoTestVerifier `go test -json`. CountTestFuncs is regex-based (judges unparseable trees);
+    t.Skip() gap noted. Fixture = temp-dir git repo + nested Go module.
+- **NEXT = `GO_MIGRATION_PLAN.md` §5 step 4** (`internal/semantic`: GoAnalyzer, SemanticConflicts via
+  build-diag+AST, InferRename, RepairRename — sort all outputs), then §5.5 resolver, §5.6 integrate
+  loop + seed fixtures → 24-test parity, §5.7 cmd/braid demo. `hackathon/` stays frozen.
+
 ### 2026-10-12 — DIRECTION CHANGE: production Go rewrite; froze hackathon snapshot
 - **Decision (user):** Braid is a **production** build, not just a hackathon demo. The whole thing is
   being **rewritten in Go** (single language) and the user's own **Keploy + Entire source is migrated
