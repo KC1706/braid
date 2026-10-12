@@ -3,13 +3,16 @@
 > Cross-session memory. Update this at the end of every work session: what changed, what's next,
 > what's blocked. Newest entry on top. See `plan.md` for the full plan.
 
-**Deadline:** 2026-10-14 · **Today:** 2026-10-11 · **Phase:** PIPELINE + LIVE DASHBOARD DEPLOYED
+**Deadline:** 2026-10-14 · **Today:** 2026-10-12 · **Phase:** PIPELINE + LIVE DASHBOARD DEPLOYED; PRODUCTION PLAN WRITTEN
 
 > **TL;DR for a fresh session:** The core thesis (swarm of agents → test-verified hybrid merge) is
 > BUILT and PROVEN end-to-end on real Cloudflare Artifacts, AND it now has a deployed live dashboard
 > (orchestrator Durable Object + WebSocket). Days 0/1/2/3 effectively done. What's left is the demo
 > video + submit, optionally real-LLM agents and CF plumbing (Sandbox/Queue/Workflow). Nothing left
 > is high-risk. A legitimate, visually compelling working submission already exists and is deployed.
+> As of 2026-10-12 there is ALSO a full production-grade design in `PRODUCTION_PLAN.md` (deep research
+> on Artifacts internals + vs GitHub + scaling, a 22-point critical review C1–C22, and the architecture
+> that resolves each). That doc is forward-looking (post-hackathon) — it does NOT change the submission.
 
 ## Quick state
 - [x] Day 0 — de-risk: Artifacts auth + push — ✅ PROVEN live (Bearer header & basic-auth URL both work)
@@ -154,6 +157,60 @@ Reminder: `.dev.vars` ANTHROPIC_API_KEY optional (Workers AI already covers LLM,
 - **Anthropic key still not provided** (.dev.vars absent) — needed for live agent codegen + ClaudeResolver.
 
 ## Change log
+
+### 2026-10-12 — PRODUCTION BUILD STARTED — Phase 1 chunk 1: verification ladder + Rung 1 structural guards
+- User decided to STOP at demo-polish messaging and build the `PRODUCTION_PLAN.md` for real. No more
+  "record the video" recommendations. Implementing the plan phase by phase, committing each chunk.
+- **New: `integrator/src/ladder.ts`** — the verification ladder (§5.1). Replaces exit-code-only verify
+  with a structured `Verdict` (`green`/`red`/`inconclusive`/`incompatible`) + per-rung results.
+  - **Rung 1 structural guards (deterministic, pre-execution)** implemented: compares the frozen
+    `baseline` tree against the merged working tree and REJECTS the merge if any test file was deleted
+    or had its executable test-case count reduced (per-file or total). `countTestCases()` statically
+    counts `it(`/`test(` — `.skip`/`xit`/commented-out do NOT count, so skipping reads as a coverage
+    drop. This is Decision 2 ("tests are immutable merge inputs") enforced mechanically → **fixes C2
+    ("cheapest way to green is to delete the test") and first line vs C14.**
+  - **Rung 4 = the existing real-suite `verify()`**, now called *after* the cheap guards.
+  - `runLadder()` runs guards → tests, returns the deciding verdict.
+- **Wired through `integrate.ts`:** all three verify call-sites (per-agent, final, resolver-retry loop)
+  now go through `runLadder(repoDir, baseline, …)`. So a union/LLM resolution that touches a test file
+  is caught and fed back / rejected, not silently accepted.
+- **Provenance:** `trail.ts` gained `finalVerification` (verdict + rungs); `events.ts` `verify` event
+  gained optional `verdict`/`rungs` (dashboard-backward-compatible).
+- **Tests:** `integrator/test/ladder.test.ts` (9) proves delete-the-test and weaken-the-test are both
+  rejected, adding tests is allowed, and the static counter ignores skips/comments/method-calls. Full
+  suite green: integrator 13 + baseline 2. End-to-end integrate still composes 3 agents green through
+  the ladder (happy path unbroken).
+- **NEXT (Phase 1 remaining):** Rung 3 semantic-conflict detection (symbol graph: force clean-but-
+  semantically-conflicting pairs into the resolve path — fixes C1); the incompatibility / pick-a-winner
+  path (`incompatible` verdict + policy — fixes C4); Rung 0 contract-first frozen tests (C3); Rung 2
+  build/typecheck; pluggable toolchain (C22). Phase-1 exit gate = semantic-conflict corpus merges
+  correctly AND delete-the-test blocked (second half now DONE).
+
+### 2026-10-12 — production-grade plan written (research + critical review + architecture)
+- **New doc: `PRODUCTION_PLAN.md`** (repo root). No code changed; this is forward-looking design for
+  AFTER the hackathon. The hackathon submission is unaffected.
+- Deep research (Cloudflare blogs + independent deep-dives + GitHub DGit/Spokes) into (a) what Artifacts
+  really is — DO-per-repo, ~100KB Zig→WASM git engine, SQLite/2MB rows, R2 snapshots, KV tokens, ~128MB
+  DO mem → streaming, events→Queue→Workflow, 1GB/repo cap, $0.15/1k ops + $0.50/GB-mo; (b) how it differs
+  from GitHub (serverless DO-per-repo vs 3-replica Spokes fleet; machines vs humans); (c) scaling: storage
+  scales great, the REAL bottleneck is the merge+verify FAN-IN (a job-queue + sandbox-pool problem).
+- Did 3 rounds of senior-eng critical review → distilled to **22 flaws C1–C22** (clean-merge semantic
+  breakage, "delete-the-test to go green", green≠correct, serial/order-dependent/non-reproducible fan-in,
+  base-write race, self-triggering push→event loop, Orchestrator DO quadratic writes + event-loss
+  corruption, open unauthenticated control plane, untrusted-code+token RCE, prompt-injection→RCE, forgeable
+  in-repo provenance, SHA-1 anchor, blind-on-correctness, no DR on a beta, no unit economics, JS-only).
+- Wrote the architecture that fixes each (traceability matrix C1→fix in the doc): **two foundational
+  decisions** (customer = machine; "green" = multi-layer verdict w/ immutable tests); a **verification
+  ladder** (contract-first tests → structural guards → build/typecheck → semantic-conflict graph →
+  selected tests → contract/metamorphic → incompatibility/pick-a-winner path); **deterministic parallel
+  tree-merge** (canonical order, temp-0 + pinned model digest, resolution cache); **two-zone sandbox**
+  (untrusted compute w/ no creds+egress-deny vs git-I/O zone holding the token); authenticated control
+  plane; **externalized signed provenance ledger** (SHA-256); Base-Coordinator DO (CAS on parent sha) +
+  event-loop filter/dedup; DR mirror to R2/2nd remote; correctness observability + rollback + trust tiers;
+  unit-cost governor; operator/auditor frontend (Next.js on Pages). 6-phase roadmap, each with a hard gate.
+- NOTE: this is a PLAN only (user asked plan-first, no implementation). Natural next engineering step if
+  pursued = Phase 1 (correctness core / verification ladder). But for the HACKATHON the next step is still
+  record video + submit (below).
 
 ### 2026-10-10 — live dashboard + orchestrator Durable Object (the money shot)
 - **Worker: `Orchestrator` Durable Object** (`worker/src/index.ts`) — one instance per run id

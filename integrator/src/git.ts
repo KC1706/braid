@@ -51,3 +51,19 @@ export async function changedFiles(cwd: string, from: string, to: string): Promi
   const out = await gitOk(cwd, ["diff", "--name-only", from, to]);
   return out.split("\n").map((s) => s.trim()).filter(Boolean);
 }
+
+/** Every tracked path at a ref (recursive), for structural comparison. */
+export async function lsFiles(cwd: string, ref: string): Promise<string[]> {
+  const out = await gitOk(cwd, ["ls-tree", "-r", "--name-only", ref]);
+  return out.split("\n").map((s) => s.trim()).filter(Boolean);
+}
+
+/**
+ * Contents of one path at a ref, or `null` if it does not exist there. Used to
+ * compare a frozen baseline against the merged working tree without touching
+ * HEAD (works whether the merge is staged or already committed).
+ */
+export async function showFile(cwd: string, ref: string, path: string): Promise<string | null> {
+  const r = await git(cwd, ["show", `${ref}:${path}`]);
+  return r.code === 0 ? r.stdout : null;
+}

@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { git, gitOk, currentSha, conflictedFiles, changedFiles } from "./git.js";
 import { parseConflicts, applyResolutions } from "./conflict.js";
 import type { Resolver } from "./resolver.js";
-import { verify, type VerifyOptions } from "./verify.js";
+import { runLadder, type LadderOptions } from "./ladder.js";
 import type { Trail, ConflictRecord, AgentMergeRecord } from "./trail.js";
 import type { BraidEvent } from "./events.js";
 
@@ -20,7 +20,7 @@ export interface IntegrateOptions {
   task: string;
   agents: AgentInput[];
   resolver: Resolver;
-  verifyOptions: VerifyOptions;
+  verifyOptions: LadderOptions;
   maxRetries?: number;
   log?: (msg: string) => void;
   /** Optional structured-event sink (streams the live dashboard). */
@@ -99,6 +99,7 @@ export async function integrate(opts: IntegrateOptions): Promise<IntegrateResult
       for (const file of conflicted) {
         await resolveFileWithRetries({
           repoDir,
+          baseline,
           file,
           oursIntent,
           agent,
@@ -123,15 +124,24 @@ export async function integrate(opts: IntegrateOptions): Promise<IntegrateResult
       );
     }
 
-    // Verify the merged state regardless of path.
-    const v = await verify(repoDir, verifyOptions);
+    // Verify the merged state through the full ladder (structural guards +
+    // real tests), regardless of merge path.
+    const v = await runLadder(repoDir, baseline, verifyOptions);
     record.testResult = v.summary;
-    log(`  ${v.passed ? "✅" : "❌"} ${v.summary}`);
-    emit({ type: "verify", scope: agent.id, passed: v.passed, summary: v.summary });
+    log(`  ${v.passed ? "✅" : "❌"} [${v.verdict}] ${v.summary}`);
+    emit({
+      type: "verify",
+      scope: agent.id,
+      passed: v.passed,
+      summary: v.summary,
+      verdict: v.verdict,
+      rungs: v.rungs.map((r) => ({ rung: r.rung, name: r.name, passed: r.passed, summary: r.summary })),
+    });
     if (!v.passed) {
-      // A clean auto-merge that still breaks tests: surface it honestly.
+      // A clean auto-merge that breaks tests, OR a merge that tried to weaken
+      // the tests to pass — surface it honestly with the deciding rung.
       throw new Error(
-        `Merging ${agent.id} broke the suite and could not be reconciled:\n${v.output}`,
+        `Merging ${agent.id} failed verification [${v.verdict}] and could not be reconciled:\n${v.output}`,
       );
     }
 
@@ -140,8 +150,21 @@ export async function integrate(opts: IntegrateOptions): Promise<IntegrateResult
   }
 
   const mergedSha = await currentSha(repoDir);
-  const finalVerify = await verify(repoDir, verifyOptions);
-  emit({ type: "verify", scope: "final", passed: finalVerify.passed, summary: finalVerify.summary });
+  const finalVerify = await runLadder(repoDir, baseline, verifyOptions);
+  const finalRungs = finalVerify.rungs.map((r) => ({
+    rung: r.rung,
+    name: r.name,
+    passed: r.passed,
+    summary: r.summary,
+  }));
+  emit({
+    type: "verify",
+    scope: "final",
+    passed: finalVerify.passed,
+    summary: finalVerify.summary,
+    verdict: finalVerify.verdict,
+    rungs: finalRungs,
+  });
 
   const trail: Trail = {
     task,
@@ -151,6 +174,11 @@ export async function integrate(opts: IntegrateOptions): Promise<IntegrateResult
     agents: agentRecords,
     conflicts,
     finalTest: finalVerify.summary,
+    finalVerification: {
+      verdict: finalVerify.verdict,
+      summary: finalVerify.summary,
+      rungs: finalRungs,
+    },
     summary: {
       agentsMerged: agentRecords.length,
       filesAutoMerged: new Set(agentRecords.flatMap((a) => a.autoMergedFiles)).size,
@@ -170,11 +198,12 @@ export async function integrate(opts: IntegrateOptions): Promise<IntegrateResult
 
 interface ResolveFileArgs {
   repoDir: string;
+  baseline: string;
   file: string;
   oursIntent: string;
   agent: AgentInput;
   resolver: Resolver;
-  verifyOptions: VerifyOptions;
+  verifyOptions: LadderOptions;
   maxRetries: number;
   conflicts: ConflictRecord[];
   log: (msg: string) => void;
@@ -187,7 +216,7 @@ interface ResolveFileArgs {
  * maxRetries. The resolver (hybrid) escalates to the LLM on retry.
  */
 async function resolveFileWithRetries(a: ResolveFileArgs): Promise<void> {
-  const { repoDir, file, oursIntent, agent, resolver, verifyOptions, maxRetries, conflicts, log, emit } = a;
+  const { repoDir, baseline, file, oursIntent, agent, resolver, verifyOptions, maxRetries, conflicts, log, emit } = a;
   const abs = join(repoDir, file);
   const conflictedContent = readFileSync(abs, "utf8");
   const hunks = parseConflicts(conflictedContent);
@@ -212,7 +241,7 @@ async function resolveFileWithRetries(a: ResolveFileArgs): Promise<void> {
     writeFileSync(abs, resolved);
     await gitOk(repoDir, ["add", file]);
 
-    const v = await verify(repoDir, verifyOptions);
+    const v = await runLadder(repoDir, baseline, verifyOptions);
     if (v.passed) {
       hunks.forEach((hunk, i) => {
         conflicts.push({

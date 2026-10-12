@@ -17,7 +17,7 @@ export type BraidEvent =
   | { type: "conflict:detected"; agent: string; files: string[] }
   | { type: "conflict:attempt"; agent: string; path: string; attempt: number; strategy: string }
   | { type: "conflict:resolved"; agent: string; path: string; strategy: string; attempts: number; verified: string }
-  | { type: "verify"; scope: string; passed: boolean; summary: string }
+  | { type: "verify"; scope: string; passed: boolean; summary: string; verdict?: "green" | "red" | "inconclusive" | "incompatible"; rungs?: { rung: number; name: string; passed: boolean; summary: string }[] }
   | { type: "run:done"; green: boolean; finalTest: string; mergedSha: string; summary: Record<string, number>; usersFile?: string }
   | { type: "log"; line: string };
 
