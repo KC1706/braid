@@ -158,6 +158,32 @@ Reminder: `.dev.vars` ANTHROPIC_API_KEY optional (Workers AI already covers LLM,
 
 ## Change log
 
+### 2026-10-12 — DIRECTION CHANGE: production Go rewrite; froze hackathon snapshot
+- **Decision (user):** Braid is a **production** build, not just a hackathon demo. The whole thing is
+  being **rewritten in Go** (single language) and the user's own **Keploy + Entire source is migrated
+  IN-TREE** (all code in THIS repo, nothing referenced externally / no upstream). Keploy → the
+  automated **test layer** (`pkg/verify`: coverage, test-gen, replay, contracts). Entire → **provenance
+  + agent memory** (`pkg/provenance`: checkpoints-as-git-refs, redaction, attribution). See
+  `PRODUCTION_PLAN.md` + memory `braid-production-direction`.
+- **Agreed architecture (Go monorepo, module `github.com/KC1706/braid`, Go 1.26):**
+  `internal/{merge,ladder,resolver,semantic,policy}` = Braid's brain (port of the TS integrator;
+  `semantic` upgrades to **tree-sitter** = multi-language, also fixes C22); `pkg/verify` (from Keploy)
+  + `pkg/provenance` (from Entire); `pkg/gitx`, `pkg/models`. The CF edge (Worker + Orchestrator DO +
+  Artifacts binding + dashboard) stays a **thin TS shim** in `edge/` — Workers don't run native Go —
+  fronting a fat Go core in a Container/Sandbox. `sandbox/` = container image. Keploy's cloud deps
+  (Mongo `ReportDB`, zap, ai-service) get severed and replaced with small Braid interfaces.
+- **Migration = strangler, not big-bang:** freeze snapshot → Go skeleton+CI → port brain (re-create the
+  24 tests in Go) → migrate `pkg/verify` (pull coverage forward to de-risk Mongo-severing) → migrate
+  `pkg/provenance` → rebuild thin TS edge → delete old TS. Keep something green at every step.
+- **DONE this chunk — froze the hackathon submission** into **`hackathon/`**: a self-contained copy of
+  the proven TS demo (baseline + integrator + worker + dashboard + README/VERIFY/plan + SNAPSHOT.md),
+  standalone workspace (`cd hackathon && npm install && npm test && npm run demo`). Verified green
+  (baseline 2 + integrator 24). **Do not modify `hackathon/`** — the Go rewrite happens at repo root;
+  this snapshot stays stable + recordable. `.gitignore` `.tmp/` de-anchored so snapshot test repos
+  aren't tracked.
+- **NEXT:** stand up the Go module skeleton (`go.mod`, `cmd/braid`, `internal/*`, `pkg/*`) + CI, then
+  begin porting the brain (`gitx` → `merge` → `ladder` → `resolver` → `policy` → `semantic`).
+
 ### 2026-10-12 — Phase 1 chunk 4: Rung 3 AUTO-FIX — detect→resolve (fully closes C1)
 - Turns Rung 3 from "detect and fail honestly" into "detect and RESOLVE" (the §5.1 intent: "force that
   pair into the resolution path"). Fully deterministic, no LLM, real tests still the final gate.

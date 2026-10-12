@@ -1,0 +1,21 @@
+{
+  "name": "braid-hackathon-submission",
+  "version": "0.1.0",
+  "private": true,
+  "description": "FROZEN hackathon submission snapshot — the TS demo (swarm → hybrid test-verified merge + live dashboard). The production Go build lives at the repo root; do not modify this folder.",
+  "license": "MIT",
+  "type": "module",
+  "workspaces": [
+    "baseline",
+    "integrator",
+    "worker",
+    "dashboard"
+  ],
+  "scripts": {
+    "demo": "npm -w integrator run demo",
+    "test": "npm -w integrator test && npm -w baseline test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

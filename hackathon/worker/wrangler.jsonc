@@ -1,0 +1,24 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "braid-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-10",
+  "compatibility_flags": ["nodejs_compat"],
+  "artifacts": [
+    { "binding": "ARTIFACTS", "namespace": "braid" }
+  ],
+  "ai": { "binding": "AI" },
+  "durable_objects": {
+    "bindings": [
+      { "name": "ORCHESTRATOR", "class_name": "Orchestrator" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Orchestrator"] }
+  ],
+  "assets": {
+    "directory": "../dashboard/public",
+    "binding": "ASSETS"
+  },
+  "observability": { "enabled": true }
+}
