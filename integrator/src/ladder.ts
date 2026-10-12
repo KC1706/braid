@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { lsFiles, showFile } from "./git.js";
 import { verify, type VerifyOptions, type VerifyResult } from "./verify.js";
+import { semanticConflicts } from "./semantic.js";
 
 /**
  * The verification ladder (PRODUCTION_PLAN.md §5.1).
@@ -17,8 +18,9 @@ import { verify, type VerifyOptions, type VerifyResult } from "./verify.js";
  *
  * Rungs implemented so far:
  *   - Rung 1  structural guards (deterministic, pre-execution)  — this file
+ *   - Rung 3  semantic-conflict detection (symbol graph)        — semantic.ts
  *   - Rung 4  test execution (the existing real-suite gate)     — verify.ts
- * Rungs 0/2/3/5 and the incompatibility path land in later chunks.
+ * Rungs 0/2/5 and the incompatibility path land in later chunks.
  */
 
 /** A verdict is more than a boolean — see §5.1 / §4 C2–C4. */
@@ -167,6 +169,41 @@ export async function runLadder(
       passed: false,
       summary: guard.summary,
       output: guard.detail ?? guard.summary,
+      rungs,
+    };
+  }
+
+  // Rung 3 — semantic-conflict detection. Deterministic and cheaper than the
+  // test suite, so it runs first and catches textual-clean-but-broken merges
+  // (a symbol one fork renamed/removed that another fork still references) that
+  // the tests may not cover (C1).
+  const sem = semanticConflicts(repoDir, patterns);
+  const semRung: RungResult = sem.conflicts.length === 0
+    ? {
+        rung: 3,
+        name: "semantic-conflicts",
+        passed: true,
+        summary: `semantic graph ok (${sem.analyzed} module(s), no dangling references)`,
+      }
+    : {
+        rung: 3,
+        name: "semantic-conflicts",
+        passed: false,
+        summary: `semantic conflict: ${sem.conflicts.length} broken cross-module reference(s)`,
+        detail:
+          "A textually-clean merge left references wired to nothing (likely a symbol " +
+          "one fork renamed/removed that another still imports):\n" +
+          sem.conflicts
+            .map((c) => `  - ${c.fromFile} imports ${c.name === "default" ? "default" : `{ ${c.name} }`} from "${c.moduleSpecifier}" → ${c.targetFile} (not exported)`)
+            .join("\n"),
+      };
+  rungs.push(semRung);
+  if (!semRung.passed) {
+    return {
+      verdict: "red",
+      passed: false,
+      summary: semRung.summary,
+      output: semRung.detail ?? semRung.summary,
       rungs,
     };
   }

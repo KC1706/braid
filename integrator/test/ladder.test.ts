@@ -4,7 +4,7 @@ import { dirname, resolve, join } from "node:path";
 import { writeFileSync, rmSync } from "node:fs";
 import { seed } from "../demo/seed.js";
 import { gitOk } from "../src/git.js";
-import { countTestCases, isTestFile, structuralGuards } from "../src/ladder.js";
+import { countTestCases, isTestFile, structuralGuards, runLadder } from "../src/ladder.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -75,5 +75,23 @@ describe("structural guards (Rung 1) — tests are immutable merge inputs", () =
     );
     const r = await structuralGuards(repoDir, "baseline");
     expect(r.passed).toBe(true);
+  });
+
+  it("runLadder catches a semantic conflict (Rung 3) BEFORE running tests (C1)", async () => {
+    const repoDir = await freshRepo();
+    // Break a cross-module reference the way a clean-but-wrong merge would:
+    // index.ts imports getUser, but users.ts no longer exports it.
+    writeFileSync(
+      join(repoDir, "src/users.ts"),
+      `import { db, type User } from "./db.js";\nexport function fetchUser(id: string): User | undefined {\n  return db.find(id);\n}\n`,
+    );
+    const r = await runLadder(repoDir, "baseline", {
+      nodeModules: "/nonexistent-so-tests-would-error-if-reached",
+    });
+    expect(r.verdict).toBe("red");
+    // The deciding rung is the semantic graph, and test execution never ran.
+    expect(r.rungs.find((x) => x.name === "semantic-conflicts")?.passed).toBe(false);
+    expect(r.rungs.some((x) => x.name === "test-execution")).toBe(false);
+    expect(r.output).toMatch(/getUser/);
   });
 });

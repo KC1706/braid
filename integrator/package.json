@@ -9,6 +9,9 @@
     "swarm:live": "tsx demo/swarm-live.ts",
     "test": "vitest run"
   },
+  "dependencies": {
+    "typescript": "^5.9.3"
+  },
   "devDependencies": {
     "tsx": "^4.19.2",
     "vitest": "^2.1.8"

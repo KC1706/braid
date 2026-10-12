@@ -158,6 +158,31 @@ Reminder: `.dev.vars` ANTHROPIC_API_KEY optional (Workers AI already covers LLM,
 
 ## Change log
 
+### 2026-10-12 — Phase 1 chunk 2: Rung 3 semantic-conflict detection (fixes C1)
+- **New: `integrator/src/semantic.ts`** — the semantic-conflict detector (§5.1 Rung 3), using the
+  **real TypeScript parser** (typescript 5.9.3, now a declared integrator dep — no fragile regex).
+  Builds a symbol graph of the merged working tree: per-module exports (named/default, incl.
+  `export *` re-export following) + import bindings. Flags every **intra-repo relative import whose
+  named/default binding is absent from the target module's exports** — i.e. a textually-CLEAN merge
+  that left a reference wired to nothing (the canonical "fork A renamed/removed a symbol fork B still
+  imports"). Conservative by design: bare/node_modules specifiers and namespace imports are ignored,
+  so false positives are near-zero.
+- **Wired as Rung 3 in the ladder**, *between* structural guards and test execution. It's deterministic
+  and cheaper than the suite, so it runs first and catches breakage the tests may not cover — and when
+  it fails, **tests never run** (cheapest-first short-circuit). This is the direct **fix for C1**
+  ("the clean-merge path is the dangerous one; the engine only handled textual conflicts").
+- **Tests:** `integrator/test/semantic.test.ts` (7) — exports/imports extraction, the rename-across-
+  forks dangling-import case, missing-default, `export *` following, and no-false-positive on
+  bare/namespace imports. Plus a ladder-level test proving a broken merged tree yields verdict `red`
+  with the semantic rung deciding and test-execution skipped. Suite green: integrator **21** + baseline 2.
+  End-to-end integrate still composes 3 agents green *through* Rung 3 (no false positive on the real
+  fixture).
+- **Phase-1 exit gate:** both headline items now have mechanical coverage — delete-the-test blocked
+  (chunk 1) AND semantic/no-textual conflict detected (chunk 2). STILL TODO to fully close the gate:
+  **route** a detected Rung-3 pair back into the resolver (currently detect+fail honestly, not yet
+  auto-resolve); the **incompatibility / pick-a-winner path** (C4); Rung 0 contract-first frozen tests
+  (C3); Rung 2 build/typecheck; pluggable toolchain (C22).
+
 ### 2026-10-12 — PRODUCTION BUILD STARTED — Phase 1 chunk 1: verification ladder + Rung 1 structural guards
 - User decided to STOP at demo-polish messaging and build the `PRODUCTION_PLAN.md` for real. No more
   "record the video" recommendations. Implementing the plan phase by phase, committing each chunk.
