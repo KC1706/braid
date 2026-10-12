@@ -158,6 +158,27 @@ Reminder: `.dev.vars` ANTHROPIC_API_KEY optional (Workers AI already covers LLM,
 
 ## Change log
 
+### 2026-10-12 — Phase 1 chunk 4: Rung 3 AUTO-FIX — detect→resolve (fully closes C1)
+- Turns Rung 3 from "detect and fail honestly" into "detect and RESOLVE" (the §5.1 intent: "force that
+  pair into the resolution path"). Fully deterministic, no LLM, real tests still the final gate.
+- **`semantic.ts`:** `inferRename()` — for a dangling import caused by a rename, the new name is
+  inferable iff the target module dropped exactly the missing symbol and gained exactly one export
+  (unambiguous; returns null otherwise so a genuine deletion is NOT papered over). `aliasImport()` —
+  surgically rewrites the importer via the TS AST: `import { getUser }` → `import { fetchUser as getUser }`,
+  preserving any existing local alias and leaving every downstream reference untouched.
+- **`integrate.ts`:** per-agent verification now goes through `verifyWithSemanticRepair()` — if a clean
+  merge fails ONLY the semantic rung, it repairs one dangling reference per round (alias), commits
+  `braid: semantic repair …`, and re-runs the full ladder, bounded (≤6 rounds). If nothing can be
+  safely inferred it falls through to the incompatibility policy (escalate by default). Emits a `log`
+  event per repair so the dashboard shows it.
+- **Test:** `integrator/test/semantic-repair.test.ts` — agent-a renames getUser→fetchUser (fixing its
+  own caller); agent-b adds a new file still importing the OLD name. The merge is textually CLEAN but
+  broken; Braid auto-aliases c.ts and goes **green**, with downstream `getUser("x")` untouched and zero
+  incompatibilities. Suite green: integrator **24** + baseline 2; 3-agent happy path still green.
+- **C1 is now fully closed** (detect + resolve). Phase-1 remaining: Rung 0 contract-first frozen tests
+  (C3); Rung 2 build/typecheck; pluggable toolchain (C22). LLM-backed semantic repair (ambiguous
+  renames/true deletions) is a future add — today those correctly escalate.
+
 ### 2026-10-12 — Phase 1 chunk 3: incompatibility path (fixes C4 — "union is not a law")
 - User decision: build it pluggable, **default = escalate (never silently drops an agent's work)**;
   pick-winner available as an opt-in for full autonomy.

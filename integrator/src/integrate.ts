@@ -1,9 +1,10 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { git, gitOk, currentSha, conflictedFiles, changedFiles } from "./git.js";
+import { git, gitOk, currentSha, conflictedFiles, changedFiles, showFile } from "./git.js";
 import { parseConflicts, applyResolutions } from "./conflict.js";
 import type { Resolver } from "./resolver.js";
-import { runLadder, type LadderOptions, type Verdict } from "./ladder.js";
+import { runLadder, type LadderOptions, type LadderResult, type Verdict } from "./ladder.js";
+import { semanticConflicts, inferRename, aliasImport } from "./semantic.js";
 import type { Trail, ConflictRecord, AgentMergeRecord, IncompatibilityRecord } from "./trail.js";
 import type { BraidEvent } from "./events.js";
 import { EscalatePolicy, type IncompatibilityPolicy } from "./policy.js";
@@ -153,9 +154,18 @@ export async function integrate(opts: IntegrateOptions): Promise<IntegrateResult
     }
 
     // Verify the merged state through the full ladder (structural guards +
-    // semantic graph + real tests), when the merge itself succeeded.
+    // semantic graph + real tests), when the merge itself succeeded. A clean
+    // merge that fails ONLY the semantic rung is first routed through
+    // deterministic rename-repair (Rung 3 auto-fix) before being judged.
     if (!incompatible) {
-      const v = await runLadder(repoDir, baseline, verifyOptions);
+      const v = await verifyWithSemanticRepair({
+        repoDir,
+        baseline,
+        verifyOptions,
+        agent,
+        log,
+        emit,
+      });
       record.testResult = v.summary;
       log(`  ${v.passed ? "✅" : "❌"} [${v.verdict}] ${v.summary}`);
       emit({
@@ -292,6 +302,71 @@ async function abortOrReset(repoDir: string, parent: string): Promise<void> {
 
 function tail(text: string, lines = 30): string {
   return text.split("\n").slice(-lines).join("\n");
+}
+
+interface SemanticRepairArgs {
+  repoDir: string;
+  baseline: string;
+  verifyOptions: LadderOptions;
+  agent: AgentInput;
+  log: (msg: string) => void;
+  emit: (event: BraidEvent) => void;
+}
+
+/** True when the ladder's only failing rung is the semantic-conflict graph. */
+function isSemanticOnlyFailure(v: LadderResult): boolean {
+  const failed = v.rungs.filter((r) => !r.passed);
+  return failed.length === 1 && failed[0].name === "semantic-conflicts";
+}
+
+/**
+ * Run the ladder; if a textually-clean merge fails ONLY because of dangling
+ * cross-module references (Rung 3), route each one through deterministic
+ * rename-repair (alias the renamed export back to the name the importer uses),
+ * commit the repair, and re-verify. Bounded. This turns Rung 3 from "detect and
+ * fail" into "detect and resolve" — the §5.1 intent, fully deterministic and
+ * with the real tests still the final gate (C1).
+ */
+async function verifyWithSemanticRepair(a: SemanticRepairArgs): Promise<LadderResult> {
+  const { repoDir, baseline, verifyOptions, agent, log, emit } = a;
+  let v = await runLadder(repoDir, baseline, verifyOptions);
+
+  let round = 0;
+  const maxRounds = 6; // bounded; each round fixes at least one reference or stops
+  while (!v.passed && isSemanticOnlyFailure(v) && round < maxRounds) {
+    const repaired = await repairOneSemanticConflict(repoDir, baseline, log);
+    if (!repaired) break; // nothing we can safely infer — hand to the policy
+    emit({ type: "log", line: `semantic repair: ${repaired}` });
+    await gitOk(repoDir, ["add", "-A"]);
+    await gitOk(repoDir, ["commit", "--no-edit", "-m", `braid: semantic repair for ${agent.id} (${repaired})`]);
+    v = await runLadder(repoDir, baseline, verifyOptions);
+    round++;
+  }
+  return v;
+}
+
+/**
+ * Fix a single dangling import by rename-aliasing, if one is unambiguously
+ * inferable. Returns a short description of what it repaired, or null if nothing
+ * safe could be done. One per call so AST edit offsets never collide; the caller
+ * loops and re-detects.
+ */
+async function repairOneSemanticConflict(repoDir: string, baseline: string, log: (m: string) => void): Promise<string | null> {
+  const { conflicts } = semanticConflicts(repoDir);
+  for (const c of conflicts) {
+    if (c.kind !== "missing-export") continue;
+    const baseSrc = await showFile(repoDir, baseline, c.targetFile);
+    const nowSrc = readFileSync(join(repoDir, c.targetFile), "utf8");
+    const newName = inferRename(baseSrc, nowSrc, c.targetFile, c.name);
+    if (!newName) continue;
+    const ok = aliasImport(join(repoDir, c.fromFile), c.moduleSpecifier, c.name, newName);
+    if (ok) {
+      const msg = `${c.fromFile}: import { ${c.name} } → { ${newName} as ${c.name} } from "${c.moduleSpecifier}"`;
+      log(`    🔧 ${msg} (renamed in ${c.targetFile})`);
+      return msg;
+    }
+  }
+  return null;
 }
 
 interface ResolveFileArgs {

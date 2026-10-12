@@ -1,5 +1,5 @@
 import ts from "typescript";
-import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, dirname, relative, resolve as presolve } from "node:path";
 
 /**
@@ -223,4 +223,74 @@ export function semanticConflicts(
   }
 
   return { conflicts, analyzed: absFiles.length };
+}
+
+/**
+ * Rung 3 auto-fix (PRODUCTION_PLAN.md §5.1: "force that pair into the resolution
+ * path"). For a dangling import caused by a RENAME, the new name is inferable:
+ * if the target module dropped exactly the missing symbol and gained exactly one
+ * new export, that one is the rename. Deterministic and safe — no LLM, no guess.
+ * Returns the inferred new name, or null when it cannot be inferred unambiguously
+ * (e.g. the symbol was genuinely deleted, or several were added/removed).
+ */
+export function inferRename(
+  baseSource: string | null,
+  nowSource: string,
+  targetFileName: string,
+  missingName: string,
+): string | null {
+  if (baseSource == null) return null;
+  const baseExports = analyzeModule(targetFileName, baseSource).exports;
+  const nowExports = analyzeModule(targetFileName, nowSource).exports;
+  if (!baseExports.has(missingName)) return null; // not a rename of a base symbol
+  if (nowExports.has(missingName)) return null; // still there — not the problem
+  const added = [...nowExports].filter((n) => !baseExports.has(n));
+  const removed = [...baseExports].filter((n) => !nowExports.has(n));
+  // Unambiguous only when exactly one symbol left and exactly one arrived.
+  if (added.length === 1 && removed.length === 1 && removed[0] === missingName) {
+    return added[0];
+  }
+  return null;
+}
+
+/**
+ * Repair a dangling named import by aliasing the renamed export back to the name
+ * the importer uses: `import { getUser } ...` -> `import { fetchUser as getUser } ...`.
+ * This keeps every downstream reference working with a single, surgical edit and
+ * no change to the importer's body. Returns true if it rewrote the file.
+ */
+export function aliasImport(
+  importerAbs: string,
+  moduleSpecifier: string,
+  oldName: string,
+  newName: string,
+): boolean {
+  const text = readFileSync(importerAbs, "utf8");
+  const sf = parse(importerAbs, text);
+  let replaceStart = -1;
+  let replaceEnd = -1;
+  let localName = oldName;
+
+  sf.forEachChild((node) => {
+    if (replaceStart !== -1) return;
+    if (!ts.isImportDeclaration(node) || !ts.isStringLiteral(node.moduleSpecifier)) return;
+    if (node.moduleSpecifier.text !== moduleSpecifier) return;
+    const nb = node.importClause?.namedBindings;
+    if (!nb || !ts.isNamedImports(nb)) return;
+    for (const el of nb.elements) {
+      const imported = el.propertyName?.text ?? el.name.text; // the exported name
+      if (imported === oldName) {
+        localName = el.name.text; // preserve any existing local alias
+        replaceStart = el.getStart(sf);
+        replaceEnd = el.getEnd();
+        break;
+      }
+    }
+  });
+
+  if (replaceStart === -1) return false;
+  const replacement = `${newName} as ${localName}`;
+  const next = text.slice(0, replaceStart) + replacement + text.slice(replaceEnd);
+  writeFileSync(importerAbs, next);
+  return true;
 }
