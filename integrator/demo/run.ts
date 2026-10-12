@@ -46,7 +46,7 @@ async function main() {
       `${llm ? llm.name + " on retry" : "union only (no LLM configured)"})…`,
   );
 
-  const { mergedSha, trail, green } = await integrate({
+  const { mergedSha, trail, green, verdict } = await integrate({
     repoDir,
     baseline,
     task: TASK,
@@ -80,6 +80,10 @@ async function main() {
   console.log(`   conflicts  : ${trail.summary.conflictsResolved} resolved ` +
     `(${trail.summary.llmResolutions} via LLM)`);
   console.log(`   final test : ${trail.finalTest}`);
+  console.log(`   verdict    : ${verdict}`);
+  if (trail.incompatibilities?.length) {
+    console.log(`   incompat.  : ${trail.incompatibilities.length} (${trail.incompatibilities.map((i) => `${i.agent}:${i.action}`).join(", ")})`);
+  }
   console.log(`   status     : ${green ? "\x1b[32mGREEN ✅\x1b[0m" : "\x1b[31mRED ❌\x1b[0m"}`);
   if (bus.dashboardUrl) console.log(`   dashboard  : ${bus.dashboardUrl}`);
   await bus.flush();

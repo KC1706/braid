@@ -158,6 +158,31 @@ Reminder: `.dev.vars` ANTHROPIC_API_KEY optional (Workers AI already covers LLM,
 
 ## Change log
 
+### 2026-10-12 — Phase 1 chunk 3: incompatibility path (fixes C4 — "union is not a law")
+- User decision: build it pluggable, **default = escalate (never silently drops an agent's work)**;
+  pick-winner available as an opt-in for full autonomy.
+- **New: `integrator/src/policy.ts`** — `IncompatibilityPolicy` interface + `EscalatePolicy` (default,
+  halts the run with an `incompatible` verdict and records BOTH candidates) + `PickWinnerPolicy(order)`
+  (drops the loser by priority, records the discarded candidate, continues).
+- **`integrate.ts` refactored:** the engine no longer THROWS when an agent can't be composed (the old
+  behaviour on clean-merge-red or resolver-exhaustion). Instead it detects incompatibility (conflict
+  unresolved after `maxRetries`, OR a clean merge that fails the ladder), **git-aborts/resets the merge
+  back to the last good state** (`abortOrReset`), applies the policy, and records an
+  `IncompatibilityRecord`. `resolveFileWithRetries` now returns `{resolved}` instead of throwing.
+  Per-agent conflict provenance is only committed to the trail if that agent fully composes (an aborted
+  merge leaves no partial records). `IntegrateResult` gained `verdict`; `Trail` gained `verdict` +
+  `incompatibilities[]`; `AgentMergeRecord` gained `dropped`/`dropReason`; new `incompatible` event.
+- **Tests:** `integrator/test/incompatible.test.ts` (2) — default policy escalates (verdict
+  `incompatible`, green false, both candidates recorded, nothing dropped, NO throw); pick-winner drops
+  the loser and continues to green with the dropped agent recorded. Suite green: integrator **23** +
+  baseline 2. End-to-end 3-agent happy path still composes green; local demo prints the verdict + any
+  incompatibilities and the trail now shows all rungs (structural-guards → semantic-conflicts →
+  test-execution).
+- **Phase-1 status:** C1 (detect), C2 (immutable tests), C4 (incompatibility path) now have mechanical
+  coverage + tests. STILL TODO to fully close the gate: **route** a detected Rung-3 semantic pair back
+  into the resolver (auto-fix, not just detect); Rung 0 contract-first frozen tests (C3); Rung 2
+  build/typecheck; pluggable toolchain (C22).
+
 ### 2026-10-12 — Phase 1 chunk 2: Rung 3 semantic-conflict detection (fixes C1)
 - **New: `integrator/src/semantic.ts`** — the semantic-conflict detector (§5.1 Rung 3), using the
   **real TypeScript parser** (typescript 5.9.3, now a declared integrator dep — no fragile regex).

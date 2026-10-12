@@ -18,6 +18,29 @@ export interface AgentMergeRecord {
   autoMergedFiles: string[];
   conflictedFiles: string[];
   testResult: string;
+  /** Set when this agent was dropped by the incompatibility policy. */
+  dropped?: boolean;
+  dropReason?: string;
+}
+
+/**
+ * Recorded when an agent could not be composed with the integrated set
+ * (PRODUCTION_PLAN.md §5.1 incompatibility path, C4). Preserves BOTH candidates
+ * and the reason — nothing is silently lost — plus the policy's decision.
+ */
+export interface IncompatibilityRecord {
+  agent: string;
+  intent: string;
+  /** Intents already integrated (the side it conflicts with). */
+  withIntents: string[];
+  reason: string;
+  file?: string;
+  /** Tail of the verification failure that proved the incompatibility. */
+  detail?: string;
+  action: "escalate" | "drop";
+  /** For "drop": which agent was discarded. */
+  dropped?: string;
+  note: string;
 }
 
 /** Outcome of one verification-ladder run (PRODUCTION_PLAN.md §5.1). */
@@ -34,6 +57,10 @@ export interface Trail {
   mergedSha: string;
   agents: AgentMergeRecord[];
   conflicts: ConflictRecord[];
+  /** Agents that could not be composed (empty on a fully-composed run). */
+  incompatibilities?: IncompatibilityRecord[];
+  /** Overall run verdict: "green" | "incompatible" | "red". */
+  verdict?: "green" | "red" | "inconclusive" | "incompatible";
   finalTest: string;
   /** The deciding ladder verdict for the final merged tree. */
   finalVerification?: VerificationRecord;
