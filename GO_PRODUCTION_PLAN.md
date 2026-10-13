@@ -236,18 +236,33 @@ Sandbox pool autoscale + back-pressure + per-tenant fairness; load test.
 
 ---
 
-## 4. Sequencing of the next working session (Phase 1, small green chunks)
+## 4. Sequencing of the next working session (Phase 2, small green chunks)
 
-1. `internal/exec`: define `Executor`/`ExecRequest`/`ExecResult`/`Limits`; implement `LocalExecutor`
-   (lift the current `exec.CommandContext` logic out of `ladder/verify.go`) (+ tests). `ExecResult` keeps
-   **stdout and stderr separate** (the `go test -json` rung depends on it — see §0). Refactor the two
-   verifiers to take an `Executor`. **All 47 tests stay green — no behavior change.** Commit + push.
-2. `SandboxExecutor` (dev impl: gVisor/container; no creds, egress-deny, caps) + a test that asserts the
-   egress/credential denial. Commit + push.
-3. `internal/run.RunService` + `cmd/braid serve`; reimplement `cmd/braid demo` on top of it. Commit+push.
-4. `internal/event.HTTPEmitter` wired through `Options.Emit` to the Orchestrator DO; verify live stream
-   against the deployed worker (or `wrangler dev`). Commit + push.
-5. Meet the Phase 1 exit gate (sandboxed build+test end-to-end + red-team env check). Update `status.md`.
+*Phase 1 is DONE (1a–1d; see §3). Resume at Phase 2 — rung-1 hardening first, as it builds directly on
+the already-live `StructuralGuards`.*
+
+1. **2a Rung-1 hardening** (`internal/ladder`): (i) confine resolver edits to the conflict region — add a
+   guard that rejects a resolution touching anything outside the hunk it was handed, with a test that a
+   stray out-of-hunk edit is rejected; (ii) AST bounds on LLM/resolver output — output must parse (`go/
+   parser`) and stay within declared bounds (C14), with a non-parsing-output-rejected test. (The
+   delete-test / test-count-regression block is ALREADY live via `Ladder.Run`→`StructuralGuards` — do not
+   rebuild it.) Commit + push.
+2. **2d Determinism** (`internal/determinism` + `internal/resolver`): canonical content-hash agent order;
+   temp-0 + pinned model digest in the LLM resolvers; resolution cache keyed by
+   `hash(base+ours+theirs+context+model-digest+prompt-ver)`. Add a reproducibility test (identical inputs
+   → identical output hash, run twice). Commit + push.
+3. **2e Parallel tree merge**: fold N agents as a pairwise tree of depth O(log N), each node an independent
+   sandboxed job; full suite always at the root. Commit + push.
+4. **2b/2c Rungs 0 & 5** (ship minimal first — §5 q4): rung 0 = acceptance spec frozen + content-hashed
+   before code; rung 5 = metamorphic golden snapshots asserting every agent's contract survives the merge.
+   Commit + push.
+5. Meet the Phase 2 exit gate (conflict corpus merges correctly incl. a semantic no-textual-conflict case;
+   region-confinement + AST-bounds rejection tests; reproducibility CI asserts identical output hashes
+   twice across N agents). Update `status.md`.
+   - *Optional, can slot before/within Phase 2:* the **Linux container / CF Sandbox backend** behind
+     `exec.SandboxBackend` (cgroups → fs-confinement + CPU/mem/pids/disk caps + content-addressed bundle
+     input) — closes the 🟠 half of the Phase 1 gate before Phase 3's prod claims. Needs a Linux host
+     (this box is darwin arm64, Docker daemon down), so it may wait for the deploy target.
 
 ---
 
@@ -280,4 +295,5 @@ Sandbox pool autoscale + back-pressure + per-tenant fairness; load test.
 ---
 
 *Grounded in the live Go module (`github.com/KC1706/braid`), `ARCHITECTURE_PRODUCTION.md`, and
-`PRODUCTION_PLAN.md` §4–7. Phase 1 is the recommended resume point (status.md 2026-10-13).*
+`PRODUCTION_PLAN.md` §4–7. Phase 1 is DONE; **Phase 2 (correctness core) is the resume point** — start at
+2a rung-1 hardening (status.md 2026-10-13).*

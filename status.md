@@ -148,6 +148,21 @@
 - [~] Day 4 — README + MIT license done; video + submit still to do
 
 ## HOW TO RESUME (run these)
+
+### ▶ GO PRODUCTION (current focus — read the top entry, then start Phase 2a)
+- Sanity (all green): `go build ./... && go vet ./... && go test ./...`
+- Engine demo (local): `go run ./cmd/braid demo`  → verdict green, 3 merged · 1 conflict · 0 LLM
+- Engine demo (sandboxed, no creds + egress-deny): `go run ./cmd/braid demo --sandbox`  (same verdict)
+- Engine as a service: `go run ./cmd/braid serve` → `GET /healthz`, `POST /run` (RunSpec JSON → RunResult)
+- Stream to the deployed DO: set `BRAID_WORKER_URL=https://braid-worker.kunalchandoa925.workers.dev`
+  before `demo`/`serve`; it prints a `…/?run=<id>` URL. (Vocabulary gap: Go emits `merge:start`/
+  `verify(final)`, not TS `run:init`/`run:done` — old dashboard reducer won't fully drive; Phase 5 aligns.)
+- **NEXT (Phase 2a, rung-1 hardening in `internal/ladder`):** (i) confine resolver edits to the conflict
+  region (reject an out-of-hunk edit + test); (ii) AST bounds on resolver/LLM output (must `go/parser`-parse
+  & stay in bounds + reject-non-parsing test). The delete-test / test-count-regression block is ALREADY
+  live via `Ladder.Run`→`StructuralGuards` — do NOT rebuild it. See `GO_PRODUCTION_PLAN.md` §3 Phase 2 + §4.
+
+### TS hackathon pipeline (ON HOLD — reference only, not the current focus)
 - **Live dashboard:** https://braid-worker.kunalchandoa925.workers.dev/  (money-shot visual)
 - Local demo (no cloud) + live dashboard: `npm -w integrator run demo` → prints a
   `…/?run=<id>` URL; open it to watch the swarm stream live (events go to the deployed DO).
