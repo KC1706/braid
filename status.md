@@ -5,6 +5,22 @@
 
 **Deadline:** 2026-10-14 · **Today:** 2026-10-13 · **Phase:** GO BRAIN PORT COMPLETE; PRODUCTION ARCHITECTURE + PHASED PLAN DOCUMENTED (hackathon submission on hold — user pivoted to building the Go version for production)
 
+## 🔨 2026-10-13 — Phase 1.1 done: Executor seam extracted (commit `75e8470`)
+- Built **`internal/exec`** (new pkg): `Executor` interface + `LocalExecutor` (host-process, today's exact
+  behavior) + `Request`/`Result`/`Limits`. `Result` keeps **stdout/stderr separate** (the `go test -json`
+  rung parses stdout, reads "could not run" from stderr), with a `MergeOutput` mode for the build rung's
+  interleaved diagnostics. `Limits.Wall` honored locally via the context; CPU/Mem/Pids/Disk are for the
+  sandbox impl.
+- Refactored `internal/ladder/verify.go`: `GoBuildVerifier`/`GoTestVerifier` (and `runGo`) now call an
+  **injected `Executor`** instead of `os/exec` directly. `Exec` field is nil-defaulted to `LocalExecutor`,
+  so every caller (`cmd/braid`, demo, tests) is unchanged. **Pure seam extraction — no behavior change:**
+  full suite green (count=1), demo verdict identical (3 merged · 4 auto-merged · 1 conflict · 0 LLM).
+  Added `internal/exec/exec_test.go` (stream split, exit codes, merge mode, env, start-failure, wall limit).
+- **NEXT = Phase 1 sub-chunk 2:** `SandboxExecutor` implementing `exec.Executor` — run build+test with
+  **no creds in the env**, default-deny egress, hard CPU/mem/pids/disk/wall caps, ephemeral per job.
+  Dev impl = gVisor/container `LocalSandboxExecutor` (so the Phase 1 gate is testable without cloud);
+  CF Sandbox SDK for prod. Then 1.3 `internal/run.RunService` + `cmd/braid serve`, 1.4 `internal/event.HTTPEmitter`.
+
 ## 🗺️ 2026-10-13 — GO_PRODUCTION_PLAN.md drafted (next: execute Phase 1)
 - Wrote **`GO_PRODUCTION_PLAN.md`** (repo root, commit `1c7e5d0`): the execution plan that turns the
   runnable Go engine into the production system `ARCHITECTURE_PRODUCTION.md` describes. Mirrors
