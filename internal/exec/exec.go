@@ -33,9 +33,15 @@ type Limits struct {
 // sandbox executor drops credentials and applies EgressPolicy; LocalExecutor
 // ignores EgressPolicy.
 type Request struct {
-	Dir          string
-	Argv         []string
-	Env          []string
+	Dir  string
+	Argv []string
+	// Env entries are appended to the inherited process environment.
+	Env []string
+	// EnvOverride, when non-nil, is the process's EXACT environment — nothing is
+	// inherited from the host. The SandboxExecutor sets this to a credential-free
+	// allowlist so no token can leak into untrusted code; an empty non-nil slice
+	// means "run with no environment at all". Env is ignored when EnvOverride is set.
+	EnvOverride  []string
 	MergeOutput  bool   // interleave stdout+stderr into Result.Combined
 	EgressPolicy string // sandbox only; "" = default (deny for sandbox)
 	Limits       Limits
@@ -84,7 +90,10 @@ func (LocalExecutor) Exec(ctx context.Context, req Request) (Result, error) {
 
 	cmd := osexec.CommandContext(ctx, req.Argv[0], req.Argv[1:]...)
 	cmd.Dir = req.Dir
-	if len(req.Env) > 0 {
+	switch {
+	case req.EnvOverride != nil:
+		cmd.Env = req.EnvOverride // exact environment, nothing inherited
+	case len(req.Env) > 0:
 		cmd.Env = append(cmd.Environ(), req.Env...)
 	}
 
