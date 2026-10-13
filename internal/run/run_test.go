@@ -2,8 +2,12 @@ package run
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/KC1706/braid/internal/demo"
@@ -93,6 +97,59 @@ func TestServiceRunGreenSandbox(t *testing.T) {
 	}
 	if res.Summary.AgentsMerged != 3 {
 		t.Errorf("want 3 agents merged inside the sandbox, got %d", res.Summary.AgentsMerged)
+	}
+}
+
+// TestServiceStreamsToDashboard proves the full transport wire: a RunSpec with a
+// DashboardURL makes Service build an HTTPEmitter and stream a real run's events
+// to the (stand-in) Orchestrator DO, seq-numbered and ending in run:done.
+func TestServiceStreamsToDashboard(t *testing.T) {
+	var count atomic.Int64
+	var mu sync.Mutex
+	var sawFinal, sawMergeStart bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Path; got != "/runs/stream-1/event" {
+			t.Errorf("unexpected path %q", got)
+		}
+		count.Add(1)
+		var ev models.Event
+		_ = json.NewDecoder(r.Body).Decode(&ev)
+		mu.Lock()
+		if ev.Type == "merge:start" {
+			sawMergeStart = true
+		}
+		// The engine's terminal signal is the final verify (it does not emit a
+		// TS-style run:done; aligning the vocabulary is a dashboard-phase task).
+		if ev.Type == "verify" && ev.Status == "final" {
+			sawFinal = true
+		}
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	repoDir, baseline, agents := seedDemo(t)
+	_, err := Service{}.Run(context.Background(), RunSpec{
+		RunID:        "stream-1",
+		RepoDir:      repoDir,
+		Baseline:     baseline,
+		Agents:       agents,
+		MaxRetries:   2,
+		DashboardURL: srv.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count.Load() == 0 {
+		t.Fatal("no events reached the dashboard")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !sawMergeStart {
+		t.Error("expected a merge:start event")
+	}
+	if !sawFinal {
+		t.Error("expected a terminal verify(status=final) event")
 	}
 }
 

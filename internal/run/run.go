@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/KC1706/braid/internal/event"
 	"github.com/KC1706/braid/internal/exec"
 	"github.com/KC1706/braid/internal/ladder"
 	"github.com/KC1706/braid/internal/merge"
@@ -45,6 +46,9 @@ type RunSpec struct {
 	Sandbox bool `json:"sandbox,omitempty"`
 	// Vet adds `go vet` to the build rung.
 	Vet bool `json:"vet,omitempty"`
+	// DashboardURL, when set (and no Emitter is injected on the Service), streams
+	// the live event feed to the Orchestrator DO at that worker base URL.
+	DashboardURL string `json:"dashboardUrl,omitempty"`
 }
 
 // RunResult is the structured outcome of a run.
@@ -99,9 +103,17 @@ func (s Service) Run(ctx context.Context, spec RunSpec) (RunResult, error) {
 	if log == nil {
 		log = func(string) {}
 	}
+
+	// Pick the event sink: an explicitly injected Emitter wins (tests, custom
+	// transports); otherwise a DashboardURL builds a per-run HTTP emitter. Either
+	// way Run flushes it before returning so a short-lived caller loses nothing.
+	emitter := s.Emitter
+	if emitter == nil && spec.DashboardURL != "" {
+		emitter = event.NewHTTPEmitter(spec.DashboardURL, spec.RunID)
+	}
 	var emit func(models.Event)
-	if s.Emitter != nil {
-		emit = s.Emitter.Emit
+	if emitter != nil {
+		emit = emitter.Emit
 	}
 
 	out, err := merge.Integrate(ctx, merge.Options{
@@ -116,9 +128,9 @@ func (s Service) Run(ctx context.Context, spec RunSpec) (RunResult, error) {
 		Log:               log,
 		Emit:              emit,
 	})
-	if s.Emitter != nil {
+	if emitter != nil {
 		// Best-effort: deliver any buffered events before returning.
-		_ = s.Emitter.Flush()
+		_ = emitter.Flush()
 	}
 	if err != nil {
 		return RunResult{}, err

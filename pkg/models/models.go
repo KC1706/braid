@@ -142,6 +142,11 @@ type Trail struct {
 type Event struct {
 	Type string `json:"type"`
 
+	// Seq is a per-run monotonic sequence number stamped by the HTTP emitter so a
+	// consumer can detect a dropped event and request replay (C10). Zero when the
+	// event was not sent through a sequencing emitter.
+	Seq int `json:"seq,omitempty"`
+
 	RunID string `json:"runId,omitempty"`
 	Task  string `json:"task,omitempty"`
 	Mode  string `json:"mode,omitempty"`

@@ -82,15 +82,21 @@ func runDemo(argv []string) error {
 	for i, a := range agents {
 		specAgents[i] = run.AgentSpec{ID: a.ID, Branch: a.Branch, Intent: a.Intent}
 	}
+	runID := os.Getenv("BRAID_RUN_ID")
+	workerURL := os.Getenv("BRAID_WORKER_URL")
 	svc := run.Service{Log: func(m string) { fmt.Println(m) }}
+	if workerURL != "" {
+		fmt.Printf("▶ streaming live to %s/?run=%s\n", workerURL, runID)
+	}
 	res, err := svc.Run(context.Background(), run.RunSpec{
-		RunID:      os.Getenv("BRAID_RUN_ID"),
-		RepoDir:    dir,
-		Baseline:   baseline,
-		Task:       "demo: harden the /users API",
-		Agents:     specAgents,
-		MaxRetries: 2,
-		Sandbox:    *sandbox,
+		RunID:        runID,
+		RepoDir:      dir,
+		Baseline:     baseline,
+		Task:         "demo: harden the /users API",
+		Agents:       specAgents,
+		MaxRetries:   2,
+		Sandbox:      *sandbox,
+		DashboardURL: workerURL,
 	})
 	if err != nil {
 		return err
