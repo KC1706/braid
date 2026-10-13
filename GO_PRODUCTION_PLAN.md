@@ -127,11 +127,14 @@ the host. Nothing downstream can be trusted until untrusted code is actually con
   confinement + CPU/mem/pids/disk caps need cgroups — they land with a Linux **container backend** (not
   gVisor on this macOS box) and the **CF Sandbox SDK** for prod, both slotting behind `SandboxBackend`
   with no rung change. Content-addressed tree-bundle input is still 🟠 (today the sandbox runs over `Dir`).
-- **1c. `internal/run` — RunService.** `Run(ctx, RunSpec) (RunResult, error)` that builds
-  `merge.Options` (resolver, ladder with the chosen Executor, policy, retries) from a `RunSpec`, wires an
-  `Emitter`, calls `Integrate`, returns a structured `RunResult`. `cmd/braid serve` exposes it over HTTP
-  (one in-process transport for now; the Worker calls this later). `cmd/braid demo` is reimplemented on
-  top of `RunService` so there is a single code path.
+- **1c. `internal/run` — RunService. ✅ DONE (commit `08e98f5`).** `Service.Run(ctx, RunSpec) (RunResult,
+  error)` builds `merge.Options` from a declarative `RunSpec`: resolver selection
+  (union/auto/hybrid/workersai/claude), executor selection (local vs `SandboxExecutor` via the `Sandbox`
+  flag), ladder wiring, and a best-effort `models.Emitter` (Flush at end). `cmd/braid serve` exposes it
+  over HTTP (`POST /run`, `GET /healthz`; handler extracted as `serveMux` for tests) — the in-process
+  transport the Worker calls later. `cmd/braid demo` reimplemented on top of `run.Service` (single code
+  path) + a `--sandbox` flag; demo runs green both locally and sandboxed. Tests: run (local+sandbox
+  end-to-end, validation, resolver select, emitter), serve (healthz/bad-body/422/full run over HTTP).
 - **1d. `internal/event` — live event stream.** `HTTPEmitter` that best-effort POSTs `models.Event`s to
   the Orchestrator DO `/runs/:id/event` (seam already in `Options.Emit`), seq-numbered, non-blocking,
   with `Flush()`. Wire `Integrate`'s existing emit points through it.

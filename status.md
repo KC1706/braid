@@ -5,6 +5,27 @@
 
 **Deadline:** 2026-10-14 · **Today:** 2026-10-13 · **Phase:** GO BRAIN PORT COMPLETE; PRODUCTION ARCHITECTURE + PHASED PLAN DOCUMENTED (hackathon submission on hold — user pivoted to building the Go version for production)
 
+## 🧩 2026-10-13 — Phase 1.3 done: RunService + `braid serve` (commit `08e98f5`)
+- Built **`internal/run`**: `Service.Run(ctx, RunSpec) (RunResult, error)` — the one service layer around
+  the engine that both the CLI and the HTTP server go through (and the Worker will call later). Maps a
+  declarative `RunSpec` → `merge.Options`: resolver selection (`union`/`auto`/`hybrid`/`workersai`/
+  `claude`), executor selection (local vs `SandboxExecutor` via the `Sandbox` flag), ladder wiring, and a
+  best-effort `models.Emitter` (Flush at end). `RunResult` = verdict/green/mergedSHA/summary/trail.
+- Built **`cmd/braid serve`**: `POST /run` (RunSpec JSON → RunResult JSON) + `GET /healthz`; handler is
+  `serveMux(svc)` (extracted for tests). Live smoke verified (healthz ok, /run validates → 422).
+- Reimplemented **`cmd/braid demo`** on top of `run.Service` (single code path) + a `--sandbox` flag.
+- **Fix found by dogfooding:** running the demo sandboxed went `incompatible` because the Seatbelt profile
+  denied ALL network, breaking the demo's `httptest` (loopback) suite. Corrected to deny **external**
+  egress but **allow loopback** — real test suites need localhost; exfiltration/remote-reach is what must
+  be cut. `demo --sandbox` now GREEN, identical to local (3 merged · 1 conflict · 0 LLM). Added a
+  loopback-allowed + external-denied regression pair.
+- Tests green across the board incl. new `internal/run` (local+sandbox end-to-end, validation, resolver
+  select, emitter) and `cmd/braid` serve (healthz/bad-body/422/full run over HTTP).
+- **NEXT = Phase 1 sub-chunk 4 (last of Phase 1):** `internal/event.HTTPEmitter` — best-effort,
+  seq-numbered, non-blocking POST of `models.Event`s to the Orchestrator DO `/runs/:id/event` (wire via
+  the `Service.Emitter` seam that's already plumbed), with `Flush()`. Then meet the Phase 1 exit gate
+  writeup (env/egress red-team already proven; fs/caps deferred to the container backend).
+
 ## 🔒 2026-10-13 — Phase 1.2 done: SandboxExecutor (no-creds + egress-deny) (commit `50910ea`)
 - Built **`exec.SandboxExecutor`** (implements `exec.Executor` by composing an inner executor under a
   `SandboxBackend` with a credential-free env — the compute-zone half of the two-zone invariant):
