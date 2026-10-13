@@ -1,13 +1,12 @@
 package ladder
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strings"
 
+	"github.com/KC1706/braid/internal/exec"
 	"github.com/KC1706/braid/pkg/models"
 )
 
@@ -18,10 +17,14 @@ import (
 // to a renamed/removed symbol.
 type GoBuildVerifier struct {
 	VetToo bool
+	// Exec runs the go subcommands; nil defaults to exec.LocalExecutor (today's
+	// host-process behavior). A SandboxExecutor plugs in here unchanged.
+	Exec exec.Executor
 }
 
 func (v GoBuildVerifier) Verify(ctx context.Context, repoDir string) (models.RungResult, error) {
-	if out, ok := runGo(ctx, repoDir, "build", "./..."); !ok {
+	ex := executorOr(v.Exec)
+	if out, ok := runGo(ctx, ex, repoDir, "build", "./..."); !ok {
 		return models.RungResult{
 			Rung: 2, Name: "build", Passed: false,
 			Summary: "build failed (" + firstLine(out) + ")",
@@ -29,7 +32,7 @@ func (v GoBuildVerifier) Verify(ctx context.Context, repoDir string) (models.Run
 		}, nil
 	}
 	if v.VetToo {
-		if out, ok := runGo(ctx, repoDir, "vet", "./..."); !ok {
+		if out, ok := runGo(ctx, ex, repoDir, "vet", "./..."); !ok {
 			return models.RungResult{
 				Rung: 2, Name: "build", Passed: false,
 				Summary: "go vet failed (" + firstLine(out) + ")",
@@ -46,7 +49,12 @@ func (v GoBuildVerifier) Verify(ctx context.Context, repoDir string) (models.Run
 // GoTestVerifier is Rung 4: the acceptance gate. It runs `go test -json ./...`
 // and folds the event stream into pass/fail counts. No model opinion decides
 // correctness — only the test outcomes do.
-type GoTestVerifier struct{}
+type GoTestVerifier struct {
+	// Exec runs `go test`; nil defaults to exec.LocalExecutor. The executor must
+	// return stdout and stderr separately (MergeOutput=false) because the -json
+	// stream is parsed from stdout and a "could not run" is read from stderr.
+	Exec exec.Executor
+}
 
 // goTestEvent is one record of `go test -json` output.
 type goTestEvent struct {
@@ -56,18 +64,22 @@ type goTestEvent struct {
 	Output  string `json:"Output"`
 }
 
-func (GoTestVerifier) Verify(ctx context.Context, repoDir string) (models.RungResult, error) {
-	cmd := exec.CommandContext(ctx, "go", "test", "-json", "./...")
-	cmd.Dir = repoDir
-	cmd.Env = append(cmd.Environ(), "CI=true")
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	_ = cmd.Run() // non-zero on test failure is expected; verdict comes from the stream
+func (v GoTestVerifier) Verify(ctx context.Context, repoDir string) (models.RungResult, error) {
+	// Non-zero exit on a test failure is expected; the verdict comes from the
+	// -json stream, so the executor's OK flag is deliberately ignored here.
+	res, err := executorOr(v.Exec).Exec(ctx, exec.Request{
+		Dir:  repoDir,
+		Argv: []string{"go", "test", "-json", "./..."},
+		Env:  []string{"CI=true"},
+	})
+	if err != nil {
+		return models.RungResult{}, err // misuse only; infra → inconclusive
+	}
+	stdout, stderr := res.Stdout, res.Stderr
 
 	passed, failed, skipped := 0, 0, 0
 	var failLines []string
-	for _, line := range strings.Split(stdout.String(), "\n") {
+	for _, line := range strings.Split(stdout, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -95,11 +107,11 @@ func (GoTestVerifier) Verify(ctx context.Context, repoDir string) (models.RungRe
 
 	// A build error inside `go test` leaves zero parsed tests and writes to
 	// stderr; surface it as red rather than a false green.
-	if passed == 0 && failed == 0 && stderr.Len() > 0 {
+	if passed == 0 && failed == 0 && stderr != "" {
 		return models.RungResult{
 			Rung: 4, Name: "test-execution", Passed: false,
-			Summary: "tests could not run (" + firstLine(stderr.String()) + ")",
-			Detail:  tail(stderr.String(), 40),
+			Summary: "tests could not run (" + firstLine(stderr) + ")",
+			Detail:  tail(stderr, 40),
 		}, nil
 	}
 
@@ -108,23 +120,34 @@ func (GoTestVerifier) Verify(ctx context.Context, repoDir string) (models.RungRe
 	if skipped > 0 {
 		summary += fmt.Sprintf(", %d skipped", skipped)
 	}
-	res := models.RungResult{Rung: 4, Name: "test-execution", Passed: ok, Summary: summary}
+	rr := models.RungResult{Rung: 4, Name: "test-execution", Passed: ok, Summary: summary}
 	if !ok {
-		res.Detail = tail(strings.Join(failLines, "\n")+"\n"+stderr.String(), 40)
+		rr.Detail = tail(strings.Join(failLines, "\n")+"\n"+stderr, 40)
 	}
-	return res, nil
+	return rr, nil
+}
+
+// executorOr returns ex, or the default host-process executor when ex is nil.
+func executorOr(ex exec.Executor) exec.Executor {
+	if ex == nil {
+		return exec.LocalExecutor{}
+	}
+	return ex
 }
 
 // runGo runs a go subcommand in repoDir, returning combined output and whether
-// it exited zero.
-func runGo(ctx context.Context, repoDir, sub string, args ...string) (string, bool) {
-	cmd := exec.CommandContext(ctx, "go", append([]string{sub}, args...)...)
-	cmd.Dir = repoDir
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	err := cmd.Run()
-	return out.String(), err == nil
+// it exited zero. Output is merged (stdout+stderr interleaved) to preserve the
+// diagnostic ordering the build rung reports.
+func runGo(ctx context.Context, ex exec.Executor, repoDir, sub string, args ...string) (string, bool) {
+	res, err := ex.Exec(ctx, exec.Request{
+		Dir:         repoDir,
+		Argv:        append([]string{"go", sub}, args...),
+		MergeOutput: true,
+	})
+	if err != nil {
+		return err.Error(), false
+	}
+	return res.Combined, res.OK
 }
 
 func firstLine(s string) string {
