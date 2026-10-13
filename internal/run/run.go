@@ -80,7 +80,7 @@ func (s Service) Run(ctx context.Context, spec RunSpec) (RunResult, error) {
 		return RunResult{}, fmt.Errorf("run: Baseline is required")
 	}
 
-	res, err := resolverFor(spec.Resolver)
+	res, err := resolverForCached(spec.Resolver)
 	if err != nil {
 		return RunResult{}, err
 	}
@@ -125,6 +125,7 @@ func (s Service) Run(ctx context.Context, spec RunSpec) (RunResult, error) {
 		Resolver:          res,
 		Ladder:            lad,
 		MaxRetries:        spec.MaxRetries,
+		CanonicalOrder:    true, // production runs fold agents deterministically (2d)
 		Log:               log,
 		Emit:              emit,
 	})
@@ -144,6 +145,17 @@ func (s Service) Run(ctx context.Context, spec RunSpec) (RunResult, error) {
 		Summary:   out.Trail.Summary,
 		Trail:     out.Trail,
 	}, nil
+}
+
+// resolverForCached builds the selected resolver and wraps it in a CachingResolver
+// so identical conflicts resolve to identical bytes within and across runs (2d) —
+// the determinism the LLM path otherwise lacks, and a free win for the union path.
+func resolverForCached(kind string) (resolver.Resolver, error) {
+	r, err := resolverFor(kind)
+	if err != nil {
+		return nil, err
+	}
+	return resolver.NewCachingResolver(r, resolver.PromptVersion), nil
 }
 
 // resolverFor maps a RunSpec.Resolver string to a resolver. "" and "union" are

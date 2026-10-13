@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/KC1706/braid/internal/determinism"
 	"github.com/KC1706/braid/internal/ladder"
 	"github.com/KC1706/braid/internal/policy"
 	"github.com/KC1706/braid/internal/resolver"
@@ -36,8 +37,15 @@ type Options struct {
 	Ladder            *ladder.Ladder
 	Policy            policy.Policy // defaults to EscalatePolicy
 	MaxRetries        int
-	Log               func(string)
-	Emit              func(models.Event)
+	// CanonicalOrder folds the agents in a deterministic, input-order-independent
+	// sequence (by the content hash of each branch's diff against the baseline) so
+	// the merged result does not depend on the order the caller supplied them
+	// (GO_PRODUCTION_PLAN.md §4 2d). Off by default (callers that need a fixed
+	// order, e.g. an explicit pick-winner priority, keep it off); run.Service
+	// turns it on for production reproducibility.
+	CanonicalOrder bool
+	Log            func(string)
+	Emit           func(models.Event)
 }
 
 // Result is the outcome of an integration run.
@@ -70,6 +78,10 @@ func Integrate(ctx context.Context, o Options) (Result, error) {
 	emit := o.Emit
 	if emit == nil {
 		emit = func(models.Event) {}
+	}
+
+	if o.CanonicalOrder {
+		o.Agents = canonicalAgentOrder(o.RepoDir, o.Baseline, o.Agents)
 	}
 
 	if _, err := gitx.Ok(o.RepoDir, "config", "merge.conflictStyle", "diff3"); err != nil {
@@ -414,6 +426,21 @@ func moduleName(repoDir string) (string, error) {
 		return m[1], nil
 	}
 	return "", nil
+}
+
+// canonicalAgentOrder reorders agents deterministically by the content of each
+// branch's diff against the baseline, so the fold is independent of the order the
+// agents were supplied (GO_PRODUCTION_PLAN.md §4 2d). The diff is the "content";
+// ID+Branch+Intent are folded in too as a stable tiebreak and so the ordering is
+// still defined if a diff can't be computed (missing branch → empty diff).
+func canonicalAgentOrder(repoDir, baseline string, agents []AgentInput) []AgentInput {
+	return determinism.CanonicalOrder(agents, func(a AgentInput) string {
+		diff, err := gitx.Ok(repoDir, "diff", baseline, a.Branch)
+		if err != nil {
+			diff = ""
+		}
+		return a.ID + "\x00" + a.Branch + "\x00" + a.Intent + "\x00" + diff
+	})
 }
 
 // resolveArgs bundles the inputs to resolveFileWithRetries.

@@ -14,9 +14,20 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/KC1706/braid/internal/determinism"
 	"github.com/KC1706/braid/pkg/models"
+)
+
+// Pinned identities for determinism (GO_PRODUCTION_PLAN.md §4 2d). The model
+// digests go into the resolution cache key so a model swap invalidates the cache;
+// PromptVersion must be bumped whenever a resolver's prompt template changes.
+const (
+	claudeDefaultModel = "claude-opus-4-8"
+	workersAIModel     = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+	PromptVersion      = "v1"
 )
 
 // ResolveInput is one conflict handed to a resolver.
@@ -95,6 +106,7 @@ var httpClient = &http.Client{Timeout: 60 * time.Second}
 // exists inside a Worker). No Anthropic key needed.
 type WorkersAIResolver struct {
 	Endpoint string // full URL to POST, or "" when unconfigured
+	Model    string // pinned model id, recorded as the digest for determinism
 }
 
 // NewWorkersAIResolver builds the resolver from workerURL (falls back to
@@ -108,17 +120,20 @@ func NewWorkersAIResolver(workerURL string) WorkersAIResolver {
 	if base != "" {
 		ep = strings.TrimRight(base, "/") + "/api/resolve"
 	}
-	return WorkersAIResolver{Endpoint: ep}
+	return WorkersAIResolver{Endpoint: ep, Model: workersAIModel}
 }
 
 func (WorkersAIResolver) Name() string      { return "workers-ai" }
 func (w WorkersAIResolver) Available() bool { return w.Endpoint != "" }
 
+// ModelDigest pins the model identity into the resolution cache key.
+func (w WorkersAIResolver) ModelDigest() string { return w.Model }
+
 func (w WorkersAIResolver) Resolve(ctx context.Context, in ResolveInput) (ResolveOutput, error) {
 	if !w.Available() {
 		return ResolveOutput{}, fmt.Errorf("WorkersAIResolver: no BRAID_WORKER_URL configured")
 	}
-	body, _ := json.Marshal(map[string]string{
+	body, _ := json.Marshal(map[string]any{
 		"path":          in.Path,
 		"oursIntent":    in.OursIntent,
 		"theirsIntent":  in.TheirsIntent,
@@ -128,6 +143,8 @@ func (w WorkersAIResolver) Resolve(ctx context.Context, in ResolveInput) (Resolv
 		"contextBefore": strings.Join(in.Hunk.ContextBefore, "\n"),
 		"contextAfter":  strings.Join(in.Hunk.ContextAfter, "\n"),
 		"lastFailure":   in.LastFailure,
+		// Pin sampling to 0 so the worker's model is as deterministic as it can be.
+		"temperature": 0,
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, w.Endpoint, bytes.NewReader(body))
 	if err != nil {
@@ -170,7 +187,7 @@ type ClaudeResolver struct {
 func NewClaudeResolver() ClaudeResolver {
 	model := os.Getenv("BRAID_MODEL")
 	if model == "" {
-		model = "claude-opus-4-8"
+		model = claudeDefaultModel
 	}
 	endpoint := "https://api.anthropic.com/v1/messages"
 	if gw := os.Getenv("CF_AI_GATEWAY"); gw != "" {
@@ -182,15 +199,19 @@ func NewClaudeResolver() ClaudeResolver {
 func (ClaudeResolver) Name() string      { return "claude" }
 func (c ClaudeResolver) Available() bool { return c.APIKey != "" }
 
+// ModelDigest pins the model identity into the resolution cache key.
+func (c ClaudeResolver) ModelDigest() string { return c.Model }
+
 func (c ClaudeResolver) Resolve(ctx context.Context, in ResolveInput) (ResolveOutput, error) {
 	if !c.Available() {
 		return ResolveOutput{}, fmt.Errorf("ClaudeResolver: no ANTHROPIC_API_KEY configured")
 	}
 	prompt := c.buildPrompt(in)
 	body, _ := json.Marshal(map[string]any{
-		"model":      c.Model,
-		"max_tokens": 1024,
-		"messages":   []map[string]string{{"role": "user", "content": prompt}},
+		"model":       c.Model,
+		"max_tokens":  1024,
+		"temperature": 0, // deterministic sampling (GO_PRODUCTION_PLAN.md §4 2d)
+		"messages":    []map[string]string{{"role": "user", "content": prompt}},
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Endpoint, bytes.NewReader(body))
 	if err != nil {
@@ -278,6 +299,83 @@ func (h HybridResolver) Resolve(ctx context.Context, in ResolveInput) (ResolveOu
 		return h.Union.Resolve(ctx, in)
 	}
 	return h.LLM.Resolve(ctx, in)
+}
+
+// digester is implemented by resolvers that pin a model identity (the LLM ones).
+type digester interface{ ModelDigest() string }
+
+// ModelDigestOf returns a resolver's pinned model identity, or "none" for a
+// purely deterministic resolver (the union) that has nothing to pin.
+func ModelDigestOf(r Resolver) string {
+	if d, ok := r.(digester); ok {
+		return d.ModelDigest()
+	}
+	return "none"
+}
+
+// CachingResolver memoizes an inner resolver by the content of the conflict it is
+// handed (GO_PRODUCTION_PLAN.md §4 2d). The key is
+// hash(path+base+ours+theirs+contextBefore+contextAfter+oursIntent+theirsIntent+
+// lastFailure+modelDigest+promptVersion) — every input that can change the
+// answer. Identical conflicts under the same model+prompt therefore always
+// resolve to the same bytes, which (a) makes an otherwise nondeterministic LLM
+// resolver reproducible within and across runs, and (b) avoids a duplicate call
+// for a repeated hunk. The union path is already deterministic; wrapping it is
+// harmless. Safe for concurrent use.
+type CachingResolver struct {
+	Inner     Resolver
+	PromptVer string
+
+	mu    sync.Mutex
+	cache map[string]ResolveOutput
+}
+
+// NewCachingResolver wraps inner. PromptVer defaults to the package PromptVersion.
+func NewCachingResolver(inner Resolver, promptVer string) *CachingResolver {
+	if promptVer == "" {
+		promptVer = PromptVersion
+	}
+	return &CachingResolver{Inner: inner, PromptVer: promptVer, cache: map[string]ResolveOutput{}}
+}
+
+func (c *CachingResolver) Name() string { return "cache(" + c.Inner.Name() + ")" }
+
+// Key is the deterministic cache key for one conflict (exported for tests and the
+// provenance ledger, which records the key alongside the resolution).
+func (c *CachingResolver) Key(in ResolveInput) string {
+	h := in.Hunk
+	return determinism.ContentHash(
+		in.Path,
+		strings.Join(h.Base, "\n"),
+		strings.Join(h.Ours, "\n"),
+		strings.Join(h.Theirs, "\n"),
+		strings.Join(h.ContextBefore, "\n"),
+		strings.Join(h.ContextAfter, "\n"),
+		in.OursIntent,
+		in.TheirsIntent,
+		in.LastFailure,
+		ModelDigestOf(c.Inner),
+		c.PromptVer,
+	)
+}
+
+func (c *CachingResolver) Resolve(ctx context.Context, in ResolveInput) (ResolveOutput, error) {
+	key := c.Key(in)
+	c.mu.Lock()
+	if out, ok := c.cache[key]; ok {
+		c.mu.Unlock()
+		return out, nil
+	}
+	c.mu.Unlock()
+
+	out, err := c.Inner.Resolve(ctx, in)
+	if err != nil {
+		return out, err
+	}
+	c.mu.Lock()
+	c.cache[key] = out
+	c.mu.Unlock()
+	return out, nil
 }
 
 // AutoLLMResolver picks the LLM resolver by what's configured: Claude if

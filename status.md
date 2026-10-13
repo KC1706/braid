@@ -3,7 +3,41 @@
 > Cross-session memory. Update this at the end of every work session: what changed, what's next,
 > what's blocked. Newest entry on top. See `plan.md` for the full plan.
 
-**Deadline:** 2026-10-14 · **Today:** 2026-10-13 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1 COMPLETE** + **Phase 2a done** (rung-1 resolution guards); next = Phase 2d determinism (hackathon submission on hold — user pivot)
+**Deadline:** 2026-10-14 · **Today:** 2026-10-13 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1 COMPLETE** + **Phase 2a + 2d done** (rung-1 resolution guards + determinism); next = Phase 2e parallel tree merge (hackathon submission on hold — user pivot)
+
+## ✅ 2026-10-13 — Phase 2d done: determinism (`internal/determinism` + resolver + merge)
+- New **`internal/determinism`** package — the reproducibility primitives:
+  - **`ContentHash(parts…)`** — hex SHA-256 over length-prefixed parts (so the part boundary is
+    unambiguous). The one hashing primitive agent-order, the resolution cache and the fingerprint share.
+  - **`CanonicalOrder[T](items, key)`** — generic, permutation-invariant ordering: ascending by
+    `ContentHash(key(item))` with the raw key as tiebreak. Does not mutate its input.
+  - **`TreeHash(repoDir, ref)`** = `git rev-parse ref^{tree}` (content-addressed, metadata-free), and
+    **`FingerprintTree(repoDir, ref, excludePrefixes…)`** — hashes `git ls-tree -r` blob entries
+    excluding a prefix (used to exclude `.braid/trail.json`, which embeds timestamps and isn't part of
+    "the merge result").
+- **`resolver.CachingResolver`** — memoizes any inner resolver by
+  `ContentHash(path+base+ours+theirs+ctxBefore+ctxAfter+oursIntent+theirsIntent+lastFailure+modelDigest+promptVer)`.
+  Identical conflicts under the same model+prompt → identical bytes within AND across runs (the
+  determinism the LLM path lacks; free for the deterministic union). `Key()` + `ModelDigestOf()` exported.
+  Pinned constants: `claudeDefaultModel`, `workersAIModel`, `PromptVersion="v1"`.
+- **temp-0 + model digest in the LLM resolvers:** `temperature:0` added to both the Claude and Workers AI
+  request bodies; `ClaudeResolver.ModelDigest()` / `WorkersAIResolver.ModelDigest()` pin the model id into
+  the cache key (a model swap invalidates the cache).
+- **Canonical agent order wired in:** new `merge.Options.CanonicalOrder bool` (default OFF — the low-level
+  order-dependent merge tests, e.g. pick-winner priority, keep it off). When ON, `Integrate` reorders
+  agents by `canonicalAgentOrder` = content hash of each branch's `git diff baseline..branch` (+ID/Branch/
+  Intent tiebreak). **`run.Service` sets it ON** and wraps the resolver in `CachingResolver` (new
+  `resolverForCached`) — production runs are deterministic.
+- Tests: `internal/determinism` (hash stable+unambiguous, CanonicalOrder permutation-invariant +
+  non-mutating), `internal/resolver/caching_test.go` (memoizes a counting/nondeterministic inner — 1 call
+  for 2 identical resolves; key varies with every keyed field incl. prompt version; digest-of), and the
+  **reproducibility gate `internal/merge/reproducible_test.go`**: the 3-agent fixture folded in two
+  different agent orders (and a 3rd repeat run) yields the IDENTICAL source-tree fingerprint. **Full suite
+  + vet green; `demo` verdict identical (3 merged · 1 conflict via union · 0 LLM).**
+- **NEXT = Phase 2e parallel tree merge** (fold N agents as a pairwise tree of depth O(log N), each node an
+  independent sandboxed job; full suite always at the root). Then 2b/2c rungs 0 & 5, then the Phase 2 exit
+  gate (conflict corpus incl. a semantic no-textual-conflict case + the reproducibility CI already proven
+  here). See `GO_PRODUCTION_PLAN.md` §3 Phase 2 + §4.
 
 ## ✅ 2026-10-13 — Phase 2a done: rung-1 resolution guards (`internal/ladder`)
 - New **`internal/ladder/resolution_guard.go`** — three guards run on whatever a resolver (union OR LLM)
