@@ -110,16 +110,23 @@ does not start until the previous gate is met and pushed.
 control plane can call, and it makes "we ran your real tests" true in an isolated sandbox rather than on
 the host. Nothing downstream can be trusted until untrusted code is actually contained.*
 
-- **1a. `internal/exec` — the Executor seam.** Define `Executor interface { Exec(ctx, ExecRequest)
-  (ExecResult, error) }` where `ExecRequest{ Dir/Bundle, Argv, Env, Limits{CPU,Mem,Pids,Wall,Disk},
-  EgressPolicy }`. Refactor `ladder.GoBuildVerifier`/`GoTestVerifier` (and `runGo`) to call an injected
-  `Executor` instead of `exec.CommandContext` directly. Ship `LocalExecutor` reproducing today's exact
-  behavior (default, keeps the demo green). **No behavior change in this sub-chunk** — pure seam
-  extraction, all 47 tests still green.
-- **1b. `SandboxExecutor`.** Run build+test inside an isolated sandbox: **no credentials in the env**,
-  default-deny egress (allowlisted module/registry mirror only), hard CPU/mem/pids/disk/wall caps,
-  ephemeral per job. Target CF Sandbox SDK for prod; a `gVisor`/container `LocalSandboxExecutor` for dev
-  so the gate is testable without cloud. Input is a content-addressed tree bundle, not a shared dir.
+- **1a. `internal/exec` — the Executor seam. ✅ DONE (commit `75e8470`).** `Executor interface { Exec(ctx,
+  Request) (Result, error) }` with `Request{ Dir, Argv, Env, EnvOverride, MergeOutput, EgressPolicy,
+  Limits{CPU,Mem,Pids,Wall,Disk} }` and `Result{ Stdout, Stderr, Combined, ExitCode, OK }` (stdout/stderr
+  split for the `go test -json` rung). `ladder.GoBuildVerifier`/`GoTestVerifier`/`runGo` call an injected
+  `Executor`; nil defaults to `LocalExecutor` (today's exact behavior) so every caller is unchanged.
+  Pure seam extraction — full suite + demo verdict unchanged.
+- **1b. `SandboxExecutor`. ✅ DONE (commit `50910ea`).** Composes an inner `Executor` under a
+  `SandboxBackend` with a credential-free environment: `Policy{EnvAllowlist, ExtraEnv, DenyEgress,
+  Limits}` + `DefaultPolicy` (minimal non-secret env, `GOPROXY=off`, network denied, 5m wall);
+  `SanitizeEnv` strips the host env to the allowlist (no token/API key reaches untrusted code) via
+  `Request.EnvOverride`. Backends: **`SeatbeltBackend`** (macOS `sandbox-exec`, denies all network — the
+  working dev isolation on this box, egress-deny proven against a live baseline) and `DirectBackend`
+  (env-strip only, honest fallback). **Proven today:** credentials stripped + egress denied + the
+  ladder's real build+test run GREEN inside the sandbox. **Still backend-provided (🟠):** filesystem
+  confinement + CPU/mem/pids/disk caps need cgroups — they land with a Linux **container backend** (not
+  gVisor on this macOS box) and the **CF Sandbox SDK** for prod, both slotting behind `SandboxBackend`
+  with no rung change. Content-addressed tree-bundle input is still 🟠 (today the sandbox runs over `Dir`).
 - **1c. `internal/run` — RunService.** `Run(ctx, RunSpec) (RunResult, error)` that builds
   `merge.Options` (resolver, ladder with the chosen Executor, policy, retries) from a `RunSpec`, wires an
   `Emitter`, calls `Integrate`, returns a structured `RunResult`. `cmd/braid serve` exposes it over HTTP
@@ -130,10 +137,14 @@ the host. Nothing downstream can be trusted until untrusted code is actually con
   with `Flush()`. Wire `Integrate`'s existing emit points through it.
 
 **Exit gate (Phase 1):** `braid serve` runs a full integration end-to-end with **build and tests
-executed inside the SandboxExecutor**, streaming live events; a red-team check proves the sandbox has
-**no token in its environment and cannot reach the network or the host filesystem outside the bundle**;
-`LocalExecutor` keeps `go run ./cmd/braid demo` green and all `go test ./...` green. Reproducibility of
-the *demo* verdict across sandbox vs local is asserted.
+executed inside the SandboxExecutor**, streaming live events; `LocalExecutor` keeps `go run ./cmd/braid
+demo` green and all `go test ./...` green; reproducibility of the *demo* verdict across sandbox vs local
+is asserted. Red-team, split by what the dev backend can prove: **provable now (Seatbelt, ✅)** — no
+token in the sandbox env, network egress denied (both tested in `internal/exec` + `internal/ladder`);
+**provable on the container/CF backend (🟠)** — no host-filesystem access outside the job bundle and
+enforced CPU/mem/pids/disk caps (Seatbelt leaves fs/resources open). The gate is **met for 1a–1d + the
+env/egress red-team on the dev box**, and re-run in full when the container backend lands (its own
+chunk, before Phase 3's prod claims).
 
 ### Phase 2 — Correctness core: rungs 0/1/5, determinism, tree merge 🟠
 

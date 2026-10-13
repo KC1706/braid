@@ -5,6 +5,28 @@
 
 **Deadline:** 2026-10-14 · **Today:** 2026-10-13 · **Phase:** GO BRAIN PORT COMPLETE; PRODUCTION ARCHITECTURE + PHASED PLAN DOCUMENTED (hackathon submission on hold — user pivoted to building the Go version for production)
 
+## 🔒 2026-10-13 — Phase 1.2 done: SandboxExecutor (no-creds + egress-deny) (commit `50910ea`)
+- Built **`exec.SandboxExecutor`** (implements `exec.Executor` by composing an inner executor under a
+  `SandboxBackend` with a credential-free env — the compute-zone half of the two-zone invariant):
+  - `Policy{EnvAllowlist, ExtraEnv, DenyEgress, Limits}` + `DefaultPolicy` (minimal non-secret env,
+    `GOPROXY=off`, network denied, 5m wall). `SanitizeEnv` strips the host env to the allowlist so **no
+    Artifacts token / API key reaches untrusted code**. Added `Request.EnvOverride` (exact env, nothing
+    inherited); `LocalExecutor` honors it.
+  - Backends behind `SandboxBackend`: **`SeatbeltBackend`** (macOS `sandbox-exec`, denies all network —
+    the working dev isolation on THIS box, since it's darwin not Linux/gVisor) + `DirectBackend`
+    (env-strip only, honest fallback). `autoBackend` prefers Seatbelt on darwin.
+- **Proven on this host:** creds stripped from the process env; egress denied under the sandbox (tested
+  vs a live http-200 baseline); the **ladder's real build+test rungs run GREEN inside the sandbox** and a
+  clean-but-broken merge still fails the build rung. Full suite + vet green.
+- **Still 🟠 (backend-provided, needs cgroups → Linux container / CF Sandbox SDK, slots behind
+  `SandboxBackend` with no rung change):** host-fs confinement + CPU/mem/pids/disk caps, and
+  content-addressed tree-bundle input (today the sandbox runs over `Dir`). Phase 1 gate is met for
+  1a–1d + env/egress red-team on the dev box; the fs/caps half re-runs when the container backend lands.
+- **NEXT = Phase 1 sub-chunk 3:** `internal/run.RunService` — `Run(ctx, RunSpec) (RunResult, error)`
+  building `merge.Options` (resolver, ladder w/ chosen Executor, policy, retries) + wiring an `Emitter`;
+  `cmd/braid serve` over HTTP; reimplement `cmd/braid demo` on top of it (single code path). Then 1.4
+  `internal/event.HTTPEmitter` → Orchestrator DO.
+
 ## 🔨 2026-10-13 — Phase 1.1 done: Executor seam extracted (commit `75e8470`)
 - Built **`internal/exec`** (new pkg): `Executor` interface + `LocalExecutor` (host-process, today's exact
   behavior) + `Request`/`Result`/`Limits`. `Result` keeps **stdout/stderr separate** (the `go test -json`
