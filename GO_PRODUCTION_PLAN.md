@@ -20,7 +20,7 @@ The brain is done and green. `go build/vet/test ./...` pass (47 test funcs); `go
 | Package | Role | State |
 |---|---|---|
 | `internal/merge` | `Integrate(ctx, Options) (Result, error)` — the loop: merge · resolve · semantic-repair · trail | ✅ |
-| `internal/ladder` | `Verifier` seam + `GoBuildVerifier` (rung 2) · `GoTestVerifier` (rung 4) · `StructuralGuards` (rung 1) | ✅ / 🟡 guards |
+| `internal/ladder` | `Verifier` seam + `GoBuildVerifier` (rung 2) · `GoTestVerifier` (rung 4) · `StructuralGuards` (rung 1, run unconditionally by `Ladder.Run`) | ✅ / 🟡 guards |
 | `internal/semantic` | clean-merge-but-broken detection + `RepairRename` (rung 3) | ✅ |
 | `internal/resolver` | `Resolver` seam · union · Workers AI · Claude · hybrid | ✅ |
 | `internal/policy` | `EscalatePolicy` (default) · `PickWinnerPolicy` (incompatibility) | ✅ |
@@ -32,7 +32,16 @@ The brain is done and green. `go build/vet/test ./...` pass (47 test funcs); `go
    Today `cmd/braid demo` passes no `Emit`; nothing consumes events yet.
 2. `ladder.Verifier interface { Verify(ctx, repoDir) (RungResult, error) }` — today `GoBuildVerifier`
    / `GoTestVerifier` shell out with `exec.CommandContext` **in the host process, in `repoDir`**
-   (`internal/ladder/verify.go:runGo`, `GoTestVerifier.Verify`). This is the seam the sandbox slots behind.
+   (`internal/ladder/verify.go:runGo`, `GoTestVerifier.Verify`). This is the seam the sandbox slots
+   behind. **Note:** `GoTestVerifier` parses the `go test -json` stream from *stdout* and detects
+   "tests couldn't run" from a non-empty *stderr*, so the `Executor` must return stdout and stderr
+   **separately** (not merged) or that rung's parse breaks.
+
+**Already live — don't re-plan as new work:** `Integrate` runs the ladder via `Ladder.Run`
+(`integrate.go:230,295,316`), which calls `StructuralGuards` **unconditionally**. So rung 1 **already**
+blocks, in the live path, any test-file deletion or executable-test-count drop (per-file and total) —
+the "delete the test to go green" shortcut is mechanically closed today for the Go test-count. What rung
+1 is still missing (why `ARCHITECTURE_PRODUCTION.md` marks it 🟡) is in Phase 2a.
 
 **What is missing** (from `ARCHITECTURE_PRODUCTION.md` §6 status matrix): everything 🟠 — the two-zone
 sandbox, control-plane Worker (`/v1/runs`, authz, idempotency), Base-Coordinator DO, Queues+Workflow,
@@ -130,9 +139,13 @@ the *demo* verdict across sandbox vs local is asserted.
 
 *Theme: the verification ladder is the heart; make it complete and reproducible.*
 
-- **2a. Rung 1 hardening (`ladder.StructuralGuards`, 🟡→✅).** Pre-execution, deterministic: confine any
-  resolver edit to the conflict region; **reject edits to test files and any test-count/coverage
-  regression**; AST bounds on LLM output. This mechanically kills "delete the test to go green."
+- **2a. Rung 1 hardening (`ladder.StructuralGuards`, 🟡→✅) — only the gap, the core is already live.**
+  Test-file deletion and executable-test-count regression are **already enforced** by `Ladder.Run` (see
+  §0). What remains: (i) **confine resolver edits to the conflict region** (reject a resolution that
+  touches anything outside the hunk it was given); (ii) **AST bounds on LLM output** (resolver output
+  must parse and stay within declared bounds — a C14 defense); (iii) **real coverage** non-regression,
+  not just static test-count — the static `CountTestFuncs` can't see `t.Skip()`-based weakening (a known
+  gap the code comments call out); close it with Keploy coverage deltas.
 - **2b. Rung 0 — contract-first (`internal/semantic` or new `internal/contract`).** Each subtask carries
   a machine-readable acceptance spec + tests, frozen and content-hashed before code. The feature's test
   exists before its code.
@@ -146,8 +159,10 @@ the *demo* verdict across sandbox vs local is asserted.
   independent sandboxed job; full suite always at the root.
 
 **Exit gate (Phase 2):** a multi-agent conflict corpus (including a *semantic, no-textual-conflict* case)
-merges correctly; the "delete-the-test" attack is mechanically blocked by a test; **reproducibility CI
-merges identical inputs twice across N agents and asserts identical output hashes.**
+merges correctly; a resolution that edits outside its conflict region or emits non-parsing output is
+rejected by a test (the test-count/delete-test block is already live from Phase 0 — this gate adds the
+region-confinement + AST-bounds cases); **reproducibility CI merges identical inputs twice across N
+agents and asserts identical output hashes.**
 
 ### Phase 3 — Control plane + git-I/O zone (the trusted boundary) 🟠
 
@@ -204,7 +219,8 @@ Sandbox pool autoscale + back-pressure + per-tenant fairness; load test.
 ## 4. Sequencing of the next working session (Phase 1, small green chunks)
 
 1. `internal/exec`: define `Executor`/`ExecRequest`/`ExecResult`/`Limits`; implement `LocalExecutor`
-   (lift the current `exec.CommandContext` logic out of `ladder/verify.go`) (+ tests). Refactor the two
+   (lift the current `exec.CommandContext` logic out of `ladder/verify.go`) (+ tests). `ExecResult` keeps
+   **stdout and stderr separate** (the `go test -json` rung depends on it — see §0). Refactor the two
    verifiers to take an `Executor`. **All 47 tests stay green — no behavior change.** Commit + push.
 2. `SandboxExecutor` (dev impl: gVisor/container; no creds, egress-deny, caps) + a test that asserts the
    egress/credential denial. Commit + push.
