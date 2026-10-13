@@ -3,7 +3,27 @@
 > Cross-session memory. Update this at the end of every work session: what changed, what's next,
 > what's blocked. Newest entry on top. See `plan.md` for the full plan.
 
-**Deadline:** 2026-10-14 · **Today:** 2026-10-12 · **Phase:** PIPELINE + LIVE DASHBOARD DEPLOYED; PRODUCTION PLAN WRITTEN
+**Deadline:** 2026-10-14 · **Today:** 2026-10-13 · **Phase:** GO BRAIN PORT COMPLETE; PRODUCTION ARCHITECTURE DOCUMENTED (hackathon submission on hold — user pivoted to building the Go version for production)
+
+## 📐 2026-10-13 — Production architecture documented + user pivot
+- **User decision:** hackathon submission is ON HOLD ("dashboard not up to submission grade"). Focus =
+  build the **Go version to production grade**. Do NOT resume video/submit unless the user says so.
+- Confirmed the whole Go module is runnable TODAY: `go build/vet/test ./...` all green (47 test funcs),
+  `go run ./cmd/braid demo` → verdict green, 3 agents merged, 1 conflict resolved via union, 0 via LLM.
+- Wrote **`ARCHITECTURE_PRODUCTION.md`** (repo root): the production-grade architecture — topology,
+  single-run data flow, verification ladder (rungs 0–5), parallel fan-in, full API surface
+  (control-plane REST + Go engine interfaces), status matrix, AND a plain-English "new-user journey"
+  (§0: upload repo → fork-per-agent → sandboxed edits → fan-in merge → verify ladder → signed green).
+  Every component tagged ✅ built-Go / 🟠 planned / 🟡 partial-TS. Grounded in real code + PRODUCTION_PLAN §4–6.
+- Also published a **rendered-diagram artifact** (Mermaid) of the same content:
+  https://claude.ai/artifact/2MWnrxxUMqxSqqA1ZPNG6w (private to the user's account).
+- **NEXT when user resumes:** draft `GO_PRODUCTION_PLAN.md` (phased, hard exit gates, like
+  GO_MIGRATION_PLAN) then execute. Recommended Phase 1 = extract `Integrate` into a service with a real
+  event stream (the `Emit func(models.Event)` seam already exists in merge.Options) + a sandbox for test
+  execution. Dashboard/console comes LAST, against a real API — not first.
+
+---
+
 
 > **TL;DR for a fresh session:** The core thesis (swarm of agents → test-verified hybrid merge) is
 > BUILT and PROVEN end-to-end on real Cloudflare Artifacts, AND it now has a deployed live dashboard
