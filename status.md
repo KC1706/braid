@@ -3,7 +3,28 @@
 > Cross-session memory. Update this at the end of every work session: what changed, what's next,
 > what's blocked. Newest entry on top. See `plan.md` for the full plan.
 
-**Deadline:** 2026-10-14 · **Today:** 2026-10-13 · **Phase:** GO BRAIN PORT COMPLETE; PRODUCTION ARCHITECTURE DOCUMENTED (hackathon submission on hold — user pivoted to building the Go version for production)
+**Deadline:** 2026-10-14 · **Today:** 2026-10-13 · **Phase:** GO BRAIN PORT COMPLETE; PRODUCTION ARCHITECTURE + PHASED PLAN DOCUMENTED (hackathon submission on hold — user pivoted to building the Go version for production)
+
+## 🗺️ 2026-10-13 — GO_PRODUCTION_PLAN.md drafted (next: execute Phase 1)
+- Wrote **`GO_PRODUCTION_PLAN.md`** (repo root, commit `1c7e5d0`): the execution plan that turns the
+  runnable Go engine into the production system `ARCHITECTURE_PRODUCTION.md` describes. Mirrors
+  `GO_MIGRATION_PLAN.md` style — phased **P1–P6, each with a hard exit gate**, deliverables named to the
+  Go package. Grounded in the live code + `PRODUCTION_PLAN.md §4–7`.
+- Built on the two seams already in the code: `merge.Options.Emit func(models.Event)` (+ `models.Emitter`)
+  and `ladder.Verifier interface` (today the verifiers `exec.CommandContext` in-process in `verify.go`).
+- **Phase 1 = START HERE** (engine-as-a-service + real test-execution sandbox):
+  1. `internal/exec` — `Executor` seam; `LocalExecutor` lifts today's exec logic out of `ladder/verify.go`
+     (pure refactor, 47 tests stay green, no behavior change). 2. `SandboxExecutor` (no creds, egress-deny,
+     caps; CF Sandbox for prod, gVisor/container for dev). 3. `internal/run.RunService` + `cmd/braid serve`;
+     reimplement `demo` on top of it. 4. `internal/event.HTTPEmitter` → Orchestrator DO via `Options.Emit`.
+  - **Phase 1 exit gate:** full run with build+test executed INSIDE the sandbox, live events streaming,
+    red-team proves no token in the sandbox env + no network/host-fs escape; `LocalExecutor` keeps
+    `go run ./cmd/braid demo` + `go test ./...` green.
+- Later phases: P2 correctness core (rungs 0/1/5, determinism, tree merge) · P3 control plane + git-I/O
+  zone · P4 consistency & provenance (Base-Coordinator CAS, signed ledger) · P5 console (LAST) + resilience
+  + $/run · P6 scale. Each gated. See `GO_PRODUCTION_PLAN.md §3` for the full gate list.
+- **NEXT when resuming:** execute Phase 1 sub-chunk 1 — `internal/exec.Executor` + `LocalExecutor`,
+  refactor the two ladder verifiers to take it, confirm all tests green, commit+push. Then sub-chunks 2–4.
 
 ## 📐 2026-10-13 — Production architecture documented + user pivot
 - **User decision:** hackathon submission is ON HOLD ("dashboard not up to submission grade"). Focus =
