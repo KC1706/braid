@@ -3,7 +3,40 @@
 > Cross-session memory. Update this at the end of every work session: what changed, what's next,
 > what's blocked. Newest entry on top. See `plan.md` for the full plan.
 
-**Deadline:** 2026-10-14 · **Today:** 2026-10-13 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1 COMPLETE** (engine-as-a-service + sandboxed test execution + live event stream); next = Phase 2 correctness core (hackathon submission on hold — user pivot)
+**Deadline:** 2026-10-14 · **Today:** 2026-10-13 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1 COMPLETE** + **Phase 2a done** (rung-1 resolution guards); next = Phase 2d determinism (hackathon submission on hold — user pivot)
+
+## ✅ 2026-10-13 — Phase 2a done: rung-1 resolution guards (`internal/ladder`)
+- New **`internal/ladder/resolution_guard.go`** — three guards run on whatever a resolver (union OR LLM)
+  proposes, BEFORE it is written or the tests run (cheaper than build/test; a bad resolution is fed back
+  → retry → escalate, never trusted):
+  - **`ConfineToConflictRegions(original, resolved)`** (2a-i): the applied file must edit NOTHING outside
+    the conflict regions it was handed. Splits `original` into its non-conflict "spine" (n+1 segments for
+    n regions, via the diff3 markers) and anchors each segment in `resolved` — spine[0] an exact prefix,
+    spine[last] an exact suffix, middles in order. Any changed/deleted surrounding line breaks an anchor
+    → reject. Marker regexes are duplicated in-package (no merge→ladder cycle).
+  - **`CheckResolutionBounds(hunk, resolution)`** (C14): per-hunk size budget
+    `4*(ours+base+theirs)+50` lines, and rejects a replacement that reintroduces any conflict marker
+    (can't smuggle a fresh region past the splice).
+  - **`ParsesAsGo(path, src)`** (C14): a resolved `.go` file must still `go/parser`-parse (full file);
+    non-Go paths skip. Fails fast on LLM garbage before the build rung.
+  - **`GuardResolution(...)`** ties all three together — the one call the merge engine makes.
+- **Wired into `internal/merge/integrate.go`** `resolveFileWithRetries`: after `ApplyResolutions`, run
+  `ladder.GuardResolution`; a violation sets `lastFailure` + logs `⚠ rejected by resolution guard` and
+  `continue`s (treated like a red verdict — retry with the reason fed back, eventually → incompatibility
+  policy). The union/happy path is unaffected (union output is in-region, in-bounds, parseable).
+- Tests: `internal/ladder/resolution_guard_test.go` — confinement accepts in-region, rejects edits
+  before/after/between regions + surrounding-line deletion + edits to a no-conflict file + the
+  two-region middle-spine case; bounds accepts union-sized, rejects smuggled-marker + ballooned; parse
+  accepts valid Go, rejects truncated, skips non-Go; `GuardResolution` end-to-end (clean pass /
+  out-of-region fail / non-parsing fail). **Full suite + vet green; `demo` verdict identical (3 merged ·
+  1 conflict via union · 0 LLM).**
+- **Still open in 2a (deferred, as planned):** real coverage non-regression via Keploy (the static
+  `CountTestFuncs` still can't see `t.Skip()` weakening — known gap).
+- **NEXT = Phase 2d determinism** (`internal/determinism` + `internal/resolver`): canonical content-hash
+  agent order; temp-0 + pinned model digest in the LLM resolvers; resolution cache keyed by
+  `hash(base+ours+theirs+context+model-digest+prompt-ver)`; reproducibility test (identical inputs →
+  identical output hash, twice). Then 2e parallel tree merge, 2b/2c rungs 0 & 5. See `GO_PRODUCTION_PLAN.md`
+  §3 Phase 2 + §4.
 
 ## ✅ 2026-10-13 — Phase 1.4 done → PHASE 1 COMPLETE (commit `1b38a2c`)
 - Built **`internal/event.HTTPEmitter`** (implements `models.Emitter`): ordered, non-blocking,

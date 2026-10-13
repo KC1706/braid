@@ -463,7 +463,17 @@ func resolveFileWithRetries(ctx context.Context, a resolveArgs) (resolved bool, 
 		for i, o := range outputs {
 			contents[i] = o.Content
 		}
-		if err := os.WriteFile(abs, []byte(ApplyResolutions(conflictedContent, contents)), 0o644); err != nil {
+		applied := ApplyResolutions(conflictedContent, contents)
+		// Phase-2a guards: reject a resolution that edits outside its conflict
+		// region, exceeds its bounds, smuggles a marker, or (for Go) no longer
+		// parses — before it is written or the tests run. Treat a violation like
+		// a red verdict: feed the reason back and retry (→ escalate on exhaustion).
+		if gErr := ladder.GuardResolution(a.file, conflictedContent, applied, hunks, contents); gErr != nil {
+			lastFailure = gErr.Error()
+			a.log(fmt.Sprintf("    ⚠ %s: attempt %d rejected by resolution guard: %v", a.file, attempt+1, gErr))
+			continue
+		}
+		if err := os.WriteFile(abs, []byte(applied), 0o644); err != nil {
 			return false, "", err
 		}
 		if _, err := gitx.Ok(a.o.RepoDir, "add", a.file); err != nil {
