@@ -10,9 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/KC1706/braid/internal/demo"
-	"github.com/KC1706/braid/internal/ladder"
-	"github.com/KC1706/braid/internal/merge"
-	"github.com/KC1706/braid/internal/resolver"
+	"github.com/KC1706/braid/internal/run"
 )
 
 // version is overridden at build time via -ldflags "-X main.version=...".
@@ -32,6 +30,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, "braid demo:", err)
 			os.Exit(1)
 		}
+	case "serve":
+		if err := runServe(args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, "braid serve:", err)
+			os.Exit(1)
+		}
 	default:
 		usage()
 		os.Exit(2)
@@ -41,15 +44,18 @@ func main() {
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: braid <command>")
 	fmt.Fprintln(os.Stderr, "  demo      seed a throwaway Go repo + 3 agents and integrate them")
+	fmt.Fprintln(os.Stderr, "  serve     run the integration engine as an HTTP service")
 	fmt.Fprintln(os.Stderr, "  version   print the version")
 }
 
-// runDemo seeds the Go demo fixture, integrates the three agents, and prints the
-// verdict + trail summary — the Go equivalent of the TS demo/run.ts.
+// runDemo seeds the Go demo fixture, then integrates the three agents through
+// the same run.Service the HTTP server uses, and prints the verdict + trail
+// summary — the Go equivalent of the TS demo/run.ts.
 func runDemo(argv []string) error {
 	fs := flag.NewFlagSet("demo", flag.ContinueOnError)
 	repoDir := fs.String("repo", "", "repo dir to seed (default: a temp dir)")
 	keep := fs.Bool("keep", false, "keep the seeded repo after running")
+	sandbox := fs.Bool("sandbox", false, "run build+test inside the sandbox executor (no creds, egress denied)")
 	if err := fs.Parse(argv); err != nil {
 		return err
 	}
@@ -72,16 +78,19 @@ func runDemo(argv []string) error {
 		defer os.RemoveAll(filepath.Dir(dir))
 	}
 
-	l := &ladder.Ladder{Build: ladder.GoBuildVerifier{}, Test: ladder.GoTestVerifier{}}
-	res, err := merge.Integrate(context.Background(), merge.Options{
+	specAgents := make([]run.AgentSpec, len(agents))
+	for i, a := range agents {
+		specAgents[i] = run.AgentSpec{ID: a.ID, Branch: a.Branch, Intent: a.Intent}
+	}
+	svc := run.Service{Log: func(m string) { fmt.Println(m) }}
+	res, err := svc.Run(context.Background(), run.RunSpec{
+		RunID:      os.Getenv("BRAID_RUN_ID"),
 		RepoDir:    dir,
 		Baseline:   baseline,
 		Task:       "demo: harden the /users API",
-		Agents:     agents,
-		Resolver:   resolver.UnionResolver{},
-		Ladder:     l,
+		Agents:     specAgents,
 		MaxRetries: 2,
-		Log:        func(m string) { fmt.Println(m) },
+		Sandbox:    *sandbox,
 	})
 	if err != nil {
 		return err

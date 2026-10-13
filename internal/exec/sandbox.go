@@ -163,10 +163,17 @@ func (b SeatbeltBackend) Wrap(req Request, pol Policy) (Request, error) {
 	if !pol.DenyEgress {
 		return req, nil // nothing to enforce; run unwrapped
 	}
-	// Allow everything by default, then deny all network. Filesystem stays open
-	// (confinement is the container backend's job), which keeps toolchain caches
-	// and temp dirs working while egress is cut.
-	const profile = "(version 1)(allow default)(deny network*)"
+	// Allow everything by default, then deny network — but re-allow loopback, so
+	// a test suite's own httptest/localhost servers still work while *external*
+	// egress is cut (that's the property that matters: no exfiltration, no reach
+	// to a remote host). Filesystem stays open (confinement is the container
+	// backend's job), which keeps toolchain caches and temp dirs working.
+	const profile = "(version 1)" +
+		"(allow default)" +
+		"(deny network*)" +
+		`(allow network-bind (local ip "localhost:*"))` +
+		`(allow network-inbound (local ip "localhost:*"))` +
+		`(allow network-outbound (remote ip "localhost:*"))`
 	req.Argv = append([]string{"sandbox-exec", "-p", profile}, req.Argv...)
 	return req, nil
 }

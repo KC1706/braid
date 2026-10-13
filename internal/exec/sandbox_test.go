@@ -2,6 +2,8 @@ package exec
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	osexec "os/exec"
 	"runtime"
@@ -126,6 +128,32 @@ func TestSandboxDeniesEgress(t *testing.T) {
 	}
 	if sandboxed.OK {
 		t.Error("network egress should be denied inside the sandbox")
+	}
+}
+
+// Loopback must stay reachable under the sandbox — a test suite's own
+// httptest/localhost servers are not egress, and blocking them would make the
+// sandbox unusable for the exact workloads Braid verifies.
+func TestSandboxAllowsLoopback(t *testing.T) {
+	if !(SeatbeltBackend{}).Available() {
+		t.Skip("no OS sandbox backend on this host")
+	}
+	if _, err := osexec.LookPath("curl"); err != nil {
+		t.Skip("curl not available to probe loopback")
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	res, err := SandboxExecutor{Backend: SeatbeltBackend{}}.Exec(context.Background(), Request{
+		Argv: []string{"curl", "-sS", "-m", "6", "-o", "/dev/null", srv.URL},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.OK {
+		t.Errorf("loopback should be reachable inside the sandbox: exit=%d stderr=%q", res.ExitCode, res.Stderr)
 	}
 }
 
