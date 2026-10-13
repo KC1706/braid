@@ -104,7 +104,7 @@ Nothing above moves `Integrate` out of `internal/merge`; it is always the thing 
 Themes track `PRODUCTION_PLAN.md` §7, but here as concrete Go deliverables with named packages. A phase
 does not start until the previous gate is met and pushed.
 
-### Phase 1 — Engine as a service + real test-execution sandbox 🟠 (START HERE)
+### Phase 1 — Engine as a service + real test-execution sandbox ✅ DONE (1a–1d; gate met for dev backend)
 
 *Rationale: the recommended resume step (status.md 2026-10-13). It turns the library into something a
 control plane can call, and it makes "we ran your real tests" true in an isolated sandbox rather than on
@@ -135,9 +135,15 @@ the host. Nothing downstream can be trusted until untrusted code is actually con
   transport the Worker calls later. `cmd/braid demo` reimplemented on top of `run.Service` (single code
   path) + a `--sandbox` flag; demo runs green both locally and sandboxed. Tests: run (local+sandbox
   end-to-end, validation, resolver select, emitter), serve (healthz/bad-body/422/full run over HTTP).
-- **1d. `internal/event` — live event stream.** `HTTPEmitter` that best-effort POSTs `models.Event`s to
-  the Orchestrator DO `/runs/:id/event` (seam already in `Options.Emit`), seq-numbered, non-blocking,
-  with `Flush()`. Wire `Integrate`'s existing emit points through it.
+- **1d. `internal/event` — live event stream. ✅ DONE (commit `1b38a2c`).** `HTTPEmitter` (implements
+  `models.Emitter`) best-effort POSTs `models.Event`s to the Orchestrator DO `/runs/:id/event`:
+  seq-numbered (`models.Event.Seq`, for consumer gap-detection), ordered (single drain goroutine over a
+  buffered queue), non-blocking (a full queue drops; the seq gap is the signal), with idempotent
+  `Flush()`. Wired via the `Service.Emitter` seam: `RunSpec.DashboardURL` builds a per-run emitter
+  (per-request streaming, correct under concurrent `serve`); `cmd/braid demo` passes `BRAID_WORKER_URL`
+  through. Tests: event (order+seq, best-effort-on-unreachable, no-op, Flush) + a run-level stream to a
+  stand-in DO. **Gap noted:** the Go engine emits `merge:start`/`verify`/… but not TS-style
+  `run:init`/`run:done`; aligning the event vocabulary with the dashboard reducer is a Phase-5 task.
 
 **Exit gate (Phase 1):** `braid serve` runs a full integration end-to-end with **build and tests
 executed inside the SandboxExecutor**, streaming live events; `LocalExecutor` keeps `go run ./cmd/braid

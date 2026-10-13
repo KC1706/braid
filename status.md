@@ -3,7 +3,33 @@
 > Cross-session memory. Update this at the end of every work session: what changed, what's next,
 > what's blocked. Newest entry on top. See `plan.md` for the full plan.
 
-**Deadline:** 2026-10-14 · **Today:** 2026-10-13 · **Phase:** GO BRAIN PORT COMPLETE; PRODUCTION ARCHITECTURE + PHASED PLAN DOCUMENTED (hackathon submission on hold — user pivoted to building the Go version for production)
+**Deadline:** 2026-10-14 · **Today:** 2026-10-13 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1 COMPLETE** (engine-as-a-service + sandboxed test execution + live event stream); next = Phase 2 correctness core (hackathon submission on hold — user pivot)
+
+## ✅ 2026-10-13 — Phase 1.4 done → PHASE 1 COMPLETE (commit `1b38a2c`)
+- Built **`internal/event.HTTPEmitter`** (implements `models.Emitter`): ordered, non-blocking,
+  seq-numbered, best-effort POSTs of `models.Event` to `{worker}/runs/{id}/event` — the Go counterpart of
+  the TS BraidEmitter. Single drain goroutine = in-order delivery; `Emit` never blocks (full queue drops,
+  seq gap is the signal); `Flush` closes + waits (idempotent). Added `models.Event.Seq` (per-run
+  monotonic, for consumer gap-detection/replay, C10).
+- Wired via the `Service.Emitter` seam: `RunSpec.DashboardURL` → per-run `HTTPEmitter` (per-request
+  streaming, correct under concurrent `serve`); `cmd/braid demo` passes `BRAID_WORKER_URL` through.
+- Tests: event (order+seq, best-effort-on-unreachable, blank-URL no-op, dashboard URL, idempotent Flush)
+  + a run-level integration streaming a real run to a stand-in DO. Full suite + vet green.
+- **Gap noted (not a bug):** the Go engine emits `merge:start`/`verify(final)`/… but NOT TS-style
+  `run:init`/`run:done`. The existing TS worker `reduce()` keys off those, so the Go stream won't fully
+  drive the *old* dashboard. Aligning the event vocabulary with the reducer is a **Phase-5** (console)
+  task, deliberately deferred.
+- **PHASE 1 COMPLETE (1a Executor seam · 1b SandboxExecutor · 1c RunService+serve · 1d HTTPEmitter).**
+  Gate met on the dev backend: engine runs as a service, build+test execute inside the sandbox, live
+  events stream; red-team **no-creds + egress-deny proven** (Seatbelt). Still 🟠 and re-run when the
+  **Linux container / CF Sandbox backend** lands: host-fs confinement + CPU/mem/pids/disk caps +
+  content-addressed bundle input (needs cgroups; this box is darwin).
+- **NEXT = Phase 2 (Correctness core):** rung-1 hardening (confine resolver edits to the conflict region;
+  AST bounds on LLM output; real coverage via Keploy — the delete/weaken-test block is ALREADY live),
+  rung-0 contract-first, rung-5 metamorphic, determinism (canonical order + temp-0 + pinned digest +
+  resolution cache), parallel tree merge. Gate = conflict corpus merges correctly + reproducibility CI
+  (identical inputs → identical output hash, twice). Could ALSO slot the **container backend** chunk here
+  to close the Phase-1 fs/caps half before Phase 3's prod claims.
 
 ## 🧩 2026-10-13 — Phase 1.3 done: RunService + `braid serve` (commit `08e98f5`)
 - Built **`internal/run`**: `Service.Run(ctx, RunSpec) (RunResult, error)` — the one service layer around
