@@ -1,9 +1,36 @@
 # Status — Braid (Cloudflare Git-for-Agents Hackathon)
 
 > Cross-session memory. Update this at the end of every work session: what changed, what's next,
-> what's blocked. Newest entry on top. See `plan.md` for the full plan.
+> what's blocked. Newest entry on top. Full plan: `GO_PRODUCTION_PLAN.md` (plan.md/PRODUCTION_PLAN.md/
+> GO_MIGRATION_PLAN.md/ARCHITECTURE.md/VERIFY.md were removed in the 2026-10-15 repo cleanup; design lives
+> in `ARCHITECTURE_PRODUCTION.md`).
 
-**Deadline:** 2026-10-14 · **Today:** 2026-10-14 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1–4 COMPLETE & DEPLOYED LIVE** + **Phase 5a (operator console) & 5c (economics) DONE & LIVE** on `braid-worker.kunalchandoa925.workers.dev` (account `06bff0b6…`). Operator console at **`/console`** (served by the ASSETS binding) drives runs entirely through the authenticated `/v1` API + the signed ledger. **Economics gate PASSED** ($/run published + positive: a real run cost **$0.0014** vs. a published **$0.10** price → **+$0.0986 margin, 99%**). Latest worker version `3368d1e0`. Still open: **5b** (DR mirror / auto-rollback / restore drill) and **Phase 6** (scale hardening — warm pool, back-pressure, load test). (hackathon submission on hold — user pivot)
+**Deadline:** 2026-10-14 (passed) · **Today:** 2026-10-15 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1–4 COMPLETE & DEPLOYED LIVE** + **Phase 5a (operator console) & 5c (economics) DONE & LIVE** on `braid-worker.kunalchandoa925.workers.dev` (account `06bff0b6…`). Operator console at **`/console`** (served by the ASSETS binding) drives runs entirely through the authenticated `/v1` API + the signed ledger. **Economics gate PASSED** ($/run published + positive: a real run cost **$0.0014** vs. a published **$0.10** price → **+$0.0986 margin, 99%**). Latest worker version `3368d1e0`. **Repo cleaned + README rewritten for submission (2026-10-15); submission form copy drafted.** Still open: **5b** (DR mirror / auto-rollback / restore drill) and **Phase 6** (scale hardening — warm pool, back-pressure, load test).
+
+## ✅ 2026-10-15 — Submission prep: repo cleanup + README rewrite + form copy
+- **Repo cleaned for public submission** (commit on `main`, pushed). Removed the pre-Go-migration
+  **TypeScript prototype** (`integrator/` 21 files, `baseline/` 7 files) — fully superseded by the Go engine
+  (`internal/*`, `pkg/*`) + the Worker, not imported by any production code. The frozen `hackathon/` keeps its
+  own copies for provenance (**still never modified**). Removed 5 redundant internal docs: `plan.md`,
+  `GO_MIGRATION_PLAN.md`, `PRODUCTION_PLAN.md`, `ARCHITECTURE.md`, `VERIFY.md`. **Kept** `GO_PRODUCTION_PLAN.md`
+  + `ARCHITECTURE_PRODUCTION.md` + `README.md` + `status.md`. Build junk was already gitignored (nothing stray
+  tracked; `agent/`+`scripts/` were empty local dirs, removed).
+- **Root `package.json`** workspaces/scripts reduced to `worker` + `dashboard` (was baseline/integrator/agent/…);
+  `test` → `npm -w worker test`, `deploy` → `npm -w worker run deploy`.
+- **`README.md` rewritten** for the production Go + Workers build: architecture summary, Cloudflare-usage table,
+  repo layout, and full run/deploy/verify instructions (go test; `wrangler login` + two `secret put`s
+  (`CONTROL_TOKENS`, `LEDGER_SIGNING_SEED` from `braid ledger keygen`) + `wrangler deploy` with Docker up;
+  `/console`; `POST /v1/runs`; offline `braid ledger verify -pubkey`). Prereqs call out Workers Paid (Containers
+  + DO + R2 + Workers AI).
+- **Verified post-cleanup:** Go `build`+`vet`+`test` clean (17 pkgs); worker `tsc` clean, **75 tests green**.
+- **Submission (hackathon)**: public repo `https://github.com/KC1706/braid`. Drafted form copy for Project
+  vision / What we rethought (trust → two-zone + CAS + signed ledger) / How we used Cloudflare / Instructions
+  to run. **Demo video** = user records it (macOS ⌘⇧5; runbook + a seeded demo base `demo-225919` + a
+  completed showcase run + a paste-ready `demo_ledger.sh` tamper-evidence script were prepped in the session
+  scratchpad). Submission is being filed now (pivot-to-production work continues after).
+- **Scratchpad demo assets (this session only):** `op.tok`/`adm.tok`/`view.tok`, `demo_name`=`demo-225448`
+  (showcase run `demo_runid`), `demo2_name`=`demo-225919` (fresh base for a live in-video run), `demo_ledger.sh`.
+  Ledger **public key** for `braid ledger verify`: `cf2793e38b8cf7b542b93f671ba8abbb76a1a37d33ad5dc081e9c2ec8c46d4dc`.
 
 ## ✅ 2026-10-14 — Phase 5a + 5c: operator console + per-run economics (DONE & LIVE-PROVEN)
 - **5a Operator console — DEPLOYED & PROVEN LIVE.** `dashboard/public/console.html` (self-contained, served by
