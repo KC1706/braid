@@ -3,7 +3,40 @@
 > Cross-session memory. Update this at the end of every work session: what changed, what's next,
 > what's blocked. Newest entry on top. See `plan.md` for the full plan.
 
-**Deadline:** 2026-10-14 · **Today:** 2026-10-14 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1 COMPLETE** + **Phase 2 COMPLETE (2a–2e)** + **Phase 3a done + two-zone flow wired end-to-end** (`internal/gitio` + `cmd/braid run`); next = Phase 3b control-plane Worker (`/v1/runs`, authz, idempotency) + 3c Queues/Workflow (hackathon submission on hold — user pivot)
+**Deadline:** 2026-10-14 · **Today:** 2026-10-14 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1 COMPLETE** + **Phase 2 COMPLETE (2a–2e)** + **Phase 3a done** (`internal/gitio` + `cmd/braid run`) + **Phase 3b code-complete** (`/v1` control plane in `worker/`, unit-tested, NOT yet deploy-tested); next = Phase 3c Queues/Workflow + the Phase-3 deploy gate (needs wrangler + real Artifacts creds) (hackathon submission on hold — user pivot)
+
+## ✅ 2026-10-14 — Phase 3b code-complete: `/v1` control plane in `worker/` (authz · idempotency · lifecycle · per-run HMAC)
+- New **`worker/src/v1/`** — pure, offline-testable backbone (33 vitest tests green; `tsc --strict` clean):
+  - **`lifecycle.ts`** — run state machine: `queued→running→succeeded/failed/incompatible`, with
+    `escalate→awaiting_approval→approve/reject` (the §5.1 human-decision path) and `cancel` from any
+    non-terminal. Pure `transition()` + immutable `applyAction()` with an audit `history`; illegal
+    transitions → error (mapped to 409), never silently applied.
+  - **`hmac.ts`** — per-run HMAC-SHA256 over WebCrypto (`sign`/`verify`, constant-time compare,
+    `newSecret`) for authenticating `POST /runs/:id/event` (C10).
+  - **`auth.ts`** — bearer-token authN + role→action RBAC (`admin`/`operator`/`viewer`) via an injectable
+    `TokenStore`; `authorize()` is the one call a handler makes (401 vs 403).
+  - **`idempotency.ts`** — `Idempotency-Key` dedup for `POST /v1/runs`: replay the stored result on a
+    same-body retry, 409 on same-key/different-body, body-fingerprinted.
+  - **`router.ts`** — `handleV1` over injectable deps (TokenStore/IdempotencyStore/RunsStore/Forker/
+    enqueue): `POST /v1/runs` (authz → idempotency → fork N → mint per-run secret → create queued run →
+    enqueue), `GET /v1/runs/:id`, `POST /v1/runs/:id/{cancel,approve,reject}`. Zero unauthenticated surface;
+    returns null for non-`/v1` so the legacy `/api/*` + `/runs/*` routes survive. 9 tests with in-memory
+    fakes (401/403/400/404/409, idempotent retry does not double-fork, cancel/approve transitions).
+  - **`stores.ts`** — runtime-backed deps: `ArtifactsForker` (fork + JIT write token per agent) and
+    DO-backed `DORunsStore` (per-run lifecycle record + HMAC secret in the run's own Orchestrator DO) /
+    `DOIdempotencyStore` (idempotency records in a well-known `__control__` DO instance).
+- **Wired into `worker/src/index.ts`:** `handleV1` mounted ahead of the legacy routes with a
+  `CONTROL_TOKENS`-secret token store (**fail-closed** — no/invalid secret ⇒ every `/v1` request 401, never
+  open). Orchestrator DO gained `/init`, `/record` (GET/PUT), `/idem/:key` (GET/PUT), and **`/event` now
+  verifies the per-run `x-braid-signature`** when a secret exists (legacy unsigned demo path still accepted).
+- **NOT yet deploy-tested** (no wrangler/creds in this session): the pure modules + router are unit-tested,
+  but the DO/Artifacts glue is only `tsc`-checked. The **Phase-3 exit gate** — external client drives the
+  pipeline through `POST /v1/runs` on a REAL Artifacts base + a red-team proving agent-code injection can't
+  exfiltrate a token / reach network / mutate tests — runs when wrangler + real Artifacts creds are available.
+- **NEXT = Phase 3c** (Queues + durable Workflow): replace the `enqueue` no-op with a Queue producer; a
+  Workflow consumer provisions the compute zone, clones each fork, runs `RunService.Run` (sandboxed), then
+  publishes via `gitio` (3a) with the CAS; self-push event filter + dedup so the system can't trigger itself
+  (C9). Then the deploy gate. See `GO_PRODUCTION_PLAN.md` §3 Phase 3.
 
 ## ✅ 2026-10-14 — Phase 3 wiring: `RunSpec` Tree + Contracts; `cmd/braid run` one-shot (first end-to-end two-zone flow)
 - **Carry-overs closed** (2e/2c reachability) + the **first end-to-end two-zone demonstration**:
@@ -330,7 +363,9 @@
 
 ## HOW TO RESUME (run these)
 
-### ▶ GO PRODUCTION (current focus — read the top entry; Phase 2 + 3a done, next = Phase 3b/3c control plane)
+### ▶ GO PRODUCTION (current focus — read the top entry; Phase 2 + 3a done, 3b code-complete, next = Phase 3c + deploy gate)
+- **Worker /v1 tests:** `cd worker && npx vitest run` (33 green) · typecheck: `npx tsc --noEmit --strict --skipLibCheck --target es2022 --lib es2022,dom --moduleResolution bundler --module es2022 --types @cloudflare/workers-types src/index.ts`
+- **/v1 shape:** `POST /v1/runs` (Bearer + optional `Idempotency-Key`) → forks + queued run + `eventSecret`; `GET /v1/runs/:id`; `POST /v1/runs/:id/{cancel,approve,reject}`. Tokens come from the `CONTROL_TOKENS` worker secret (JSON `{"<tok>":{"id","roles":["operator"]}}`); fail-closed.
 - Sanity (all green): `go build ./... && go vet ./... && go test ./...`
 - Engine demo (local): `go run ./cmd/braid demo`  → verdict green, 3 merged · 1 conflict · 0 LLM
 - Engine demo (sandboxed, no creds + egress-deny): `go run ./cmd/braid demo --sandbox`  (same verdict)
