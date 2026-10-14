@@ -6,7 +6,7 @@
  * fakes). Keeping them here keeps index.ts thin and the interfaces honest.
  */
 
-import type { Fork, Forker, Provision, RunsStore } from "./router";
+import type { Fork, Forker, Provision, RunsStore, RunSummary } from "./router";
 import type { IdempotencyRecord, IdempotencyStore } from "./idempotency";
 import type { Run } from "./lifecycle";
 
@@ -63,10 +63,16 @@ const DO = "https://do";
  * verification is local to the DO that ingests the events.
  */
 export class DORunsStore implements RunsStore {
-  constructor(private readonly ns: DONamespace) {}
+  constructor(private readonly ns: DONamespace, private readonly controlName = "__control__") {}
   private stub(id: string) {
     return this.ns.get(this.ns.idFromName(id));
   }
+  private control() {
+    return this.ns.get(this.ns.idFromName(this.controlName));
+  }
+  // NB: the per-run DO upserts its own summary into the control index on every
+  // run write (init + record PUT), so BOTH the control plane AND the Workflow's
+  // direct record writes keep the console's run list current. list() reads it.
   async create(run: Run, secret: string): Promise<void> {
     const res = await this.stub(run.id).fetch(
       new Request(`${DO}/runs/${run.id}/init`, { method: "POST", body: JSON.stringify({ run, secret }) }),
@@ -84,6 +90,11 @@ export class DORunsStore implements RunsStore {
       new Request(`${DO}/runs/${run.id}/record`, { method: "PUT", body: JSON.stringify(run) }),
     );
     if (!res.ok) throw new Error(`DORunsStore.update: ${res.status}`);
+  }
+  async list(limit = 50): Promise<RunSummary[]> {
+    const res = await this.control().fetch(new Request(`${DO}/index?limit=${limit}`));
+    if (!res.ok) throw new Error(`DORunsStore.list: ${res.status}`);
+    return ((await res.json()) as { runs: RunSummary[] }).runs;
   }
 }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { handleV1, type Deps, type Provision, type RunsStore } from "../src/v1/router";
+import { handleV1, type Deps, type Provision, type RunsStore, type RunSummary } from "../src/v1/router";
 import { MapTokenStore, type Principal } from "../src/v1/auth";
 import { MapIdempotencyStore } from "../src/v1/idempotency";
 import type { Run } from "../src/v1/lifecycle";
@@ -18,6 +18,22 @@ class MemRuns implements RunsStore {
   async update(run: Run) {
     const e = this.map.get(run.id);
     if (e) e.run = run;
+  }
+  async list(limit = 50): Promise<RunSummary[]> {
+    return [...this.map.values()]
+      .map(({ run }) => ({
+        id: run.id,
+        status: run.status,
+        task: run.task,
+        base: run.base,
+        agents: run.agents.length,
+        createdAt: run.createdAt,
+        updatedAt: run.updatedAt,
+        verdict: run.verdict,
+        mergedSha: run.mergedSha,
+      }))
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+      .slice(0, limit);
   }
 }
 
@@ -116,6 +132,80 @@ describe("GET /v1/runs/:id", () => {
     expect(body.id).toBe("run-1");
     expect(body.eventSecret).toBeUndefined();
     expect((await handleV1(get("/v1/runs/nope", "view"), d))!.status).toBe(404);
+  });
+});
+
+describe("GET /v1/runs (console run list)", () => {
+  it("lists run summaries newest-first; requires auth; no secret leak", async () => {
+    const d = deps();
+    await handleV1(post("/v1/runs", "op", { base: "b1", task: "first" }), d);
+    await handleV1(post("/v1/runs", "op", { base: "b2", task: "second" }), d);
+    expect((await handleV1(get("/v1/runs"), d))!.status).toBe(401); // no token
+    const res = await handleV1(get("/v1/runs", "view"), d);
+    expect(res!.status).toBe(200);
+    const body = (await res!.json()) as any;
+    expect(body.runs).toHaveLength(2);
+    expect(body.runs[0].id).toBe("run-2"); // newest first
+    expect(body.runs[0]).not.toHaveProperty("eventSecret");
+    expect(body.runs[0].agents).toBe(3); // default agent count, as a number
+  });
+
+  it("honors ?limit", async () => {
+    const d = deps();
+    await handleV1(post("/v1/runs", "op", { base: "b1" }), d);
+    await handleV1(post("/v1/runs", "op", { base: "b2" }), d);
+    const res = await handleV1(get("/v1/runs?limit=1", "view"), d);
+    expect(((await res!.json()) as any).runs).toHaveLength(1);
+  });
+});
+
+describe("GET /v1/runs/:id/cost (economics)", () => {
+  it("publishes a per-run cost + positive margin", async () => {
+    const d = deps({
+      projection: {
+        state: async () => ({ seq: 6, conflicts: [{}, {}], result: { green: true } }),
+        events: async () => ({ events: [] }),
+        rebuild: async () => ({}),
+      },
+      runPriceUsd: 0.1,
+    });
+    await handleV1(post("/v1/runs", "op", { base: "b" }), d);
+    const res = await handleV1(get("/v1/runs/run-1/cost", "view"), d);
+    expect(res!.status).toBe(200);
+    const body = (await res!.json()) as any;
+    expect(body.runId).toBe("run-1");
+    expect(body.priceUsd).toBe(0.1);
+    expect(body.costUsd).toBeGreaterThan(0);
+    expect(body.marginUsd).toBeGreaterThan(0);
+    expect(Array.isArray(body.lines)).toBe(true);
+  });
+
+  it("404s an unknown run", async () => {
+    const d = deps();
+    expect((await handleV1(get("/v1/runs/nope/cost", "view"), d))!.status).toBe(404);
+  });
+});
+
+describe("GET /v1/runs/:id/live|events|rebuild (authenticated projection)", () => {
+  it("proxies the DO projection behind runs:read; 501 without a projection dep", async () => {
+    const withProj = deps({
+      projection: {
+        state: async (id) => ({ runId: id, phase: "done", seq: 3 }),
+        events: async (id, since) => ({ runId: id, since, events: [{ meta: { seq: 1 } }] }),
+        rebuild: async (id) => ({ runId: id, rebuilt: true }),
+      },
+    });
+    await handleV1(post("/v1/runs", "op", { base: "b" }), withProj);
+    const live = await handleV1(get("/v1/runs/run-1/live", "view"), withProj);
+    expect(((await live!.json()) as any).phase).toBe("done");
+    const evs = await handleV1(get("/v1/runs/run-1/events?since=0", "view"), withProj);
+    expect(((await evs!.json()) as any).events).toHaveLength(1);
+    const rb = await handleV1(get("/v1/runs/run-1/rebuild", "view"), withProj);
+    expect(((await rb!.json()) as any).rebuilt).toBe(true);
+
+    const noProj = deps();
+    await handleV1(post("/v1/runs", "op", { base: "b" }), noProj);
+    expect((await handleV1(get("/v1/runs/run-1/live", "view"), noProj))!.status).toBe(501);
   });
 });
 

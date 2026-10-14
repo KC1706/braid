@@ -8,7 +8,7 @@
  * The orchestrator Durable Object and the agent loop build on top of this.
  */
 
-import { handleV1 } from "./v1/router";
+import { handleV1, type RunSummary } from "./v1/router";
 import { MapTokenStore, type Principal, type Role } from "./v1/auth";
 import { ArtifactsForker, DOIdempotencyStore, DORunsStore } from "./v1/stores";
 import { newSecret as newRunSecret, verify as verifyHmac, SIGNATURE_HEADER } from "./v1/hmac";
@@ -154,6 +154,28 @@ export default {
         await env.INTEGRATION_WORKFLOW.create({ id: run.id, params: job });
       },
       ledger: env.LEDGER ? new R2LedgerStore(env.LEDGER as unknown as R2Like) : undefined,
+      // Authenticated reads of a run's live/rebuilt projection + log, proxied to
+      // the run's Orchestrator DO so the console never touches the legacy
+      // unauthenticated /runs/:id surface (Phase 4c/5a).
+      projection: {
+        state: async (runId) => {
+          const stub = env.ORCHESTRATOR.get(env.ORCHESTRATOR.idFromName(runId));
+          const res = await stub.fetch(new Request(`https://do/runs/${runId}/state`));
+          return res.ok ? await res.json() : null;
+        },
+        events: async (runId, since) => {
+          const stub = env.ORCHESTRATOR.get(env.ORCHESTRATOR.idFromName(runId));
+          const res = await stub.fetch(new Request(`https://do/runs/${runId}/events?since=${since}`));
+          return res.ok ? await res.json() : { runId, lastSeq: 0, events: [] };
+        },
+        rebuild: async (runId) => {
+          const stub = env.ORCHESTRATOR.get(env.ORCHESTRATOR.idFromName(runId));
+          const res = await stub.fetch(new Request(`https://do/runs/${runId}/rebuild`));
+          return res.ok ? await res.json() : {};
+        },
+      },
+      // Published per-run price for the economics view (Phase 5c). $0.10/run.
+      runPriceUsd: 0.1,
       now: () => new Date().toISOString(),
       newId: () => `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
       newSecret: newRunSecret,
@@ -261,6 +283,9 @@ export default {
 // so a rebuild can start from the latest checkpoint + tail.
 const EVENT_BLOB_THRESHOLD = 8 * 1024;
 const SNAPSHOT_EVERY = 50;
+// The well-known Orchestrator instance that holds the idempotency + run-index
+// projections (must match DOIdempotencyStore/DORunsStore controlName).
+const CONTROL_NAME = "__control__";
 const seqKey = (seq: number) => `evt:${String(seq).padStart(9, "0")}`;
 
 export class Orchestrator {
@@ -325,9 +350,55 @@ export class Orchestrator {
     }
   }
 
+  /** upsertIndex mirrors this run's summary into the well-known control index so
+   *  the operator console can list every run — from control-plane writes AND the
+   *  Workflow's direct record writes alike (Phase 5a). The control instance is
+   *  just another Orchestrator; its /index route keeps the bounded, newest-first
+   *  list. A failure here must never fail the run write, so it is best-effort. */
+  private async upsertIndex(run: Run): Promise<void> {
+    if (this.state.runId === CONTROL_NAME) return; // the index instance doesn't index itself
+    const row: RunSummary = {
+      id: run.id,
+      status: run.status,
+      task: run.task,
+      base: run.base,
+      agents: run.agents.length,
+      createdAt: run.createdAt,
+      updatedAt: run.updatedAt,
+      verdict: run.verdict,
+      mergedSha: run.mergedSha,
+    };
+    try {
+      const ctrl = this.env.ORCHESTRATOR.get(this.env.ORCHESTRATOR.idFromName(CONTROL_NAME));
+      await ctrl.fetch(new Request("https://do/index", { method: "POST", body: JSON.stringify(row) }));
+    } catch {
+      /* index is a convenience projection; never fail the run write over it */
+    }
+  }
+
   async fetch(req: Request): Promise<Response> {
     await this.loaded;
     const url = new URL(req.url);
+
+    // Run index (only on the well-known control instance): a compact list of run
+    // summaries, newest first, so the operator console can enumerate runs without
+    // a separate datastore. Each create/update upserts its row here (Phase 5a).
+    if (url.pathname === "/index") {
+      if (req.method === "POST") {
+        const row = (await req.json()) as RunSummary;
+        const idx = (await this.ctx.storage.get<RunSummary[]>("runindex")) ?? [];
+        const at = idx.findIndex((r) => r.id === row.id);
+        if (at >= 0) idx[at] = row;
+        else idx.unshift(row);
+        // keep newest-first, bounded.
+        idx.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
+        await this.ctx.storage.put("runindex", idx.slice(0, 500));
+        return json({ ok: true });
+      }
+      const limit = Math.min(Math.max(Number(url.searchParams.get("limit") ?? "50") || 50, 1), 500);
+      const idx = (await this.ctx.storage.get<RunSummary[]>("runindex")) ?? [];
+      return json({ runs: idx.slice(0, limit) });
+    }
 
     // Idempotency store (only used on the well-known control instance).
     const idem = url.pathname.match(/^\/idem\/(.+)$/);
@@ -353,13 +424,16 @@ export class Orchestrator {
       await this.ctx.storage.put("secret", secret);
       if (this.state.task === "") this.state.task = run.task;
       await this.ctx.storage.put("state", this.state);
+      await this.upsertIndex(run);
       return json({ ok: true });
     }
 
     // Control-plane: read / update the lifecycle record (cancel/approve go here).
     if (sub === "/record") {
       if (req.method === "PUT") {
-        await this.ctx.storage.put("run", await req.json());
+        const run = (await req.json()) as Run;
+        await this.ctx.storage.put("run", run);
+        await this.upsertIndex(run);
         return json({ ok: true });
       }
       const run = await this.ctx.storage.get<Run>("run");
