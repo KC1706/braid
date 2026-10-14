@@ -43,6 +43,10 @@ export interface WorkflowEnv {
 /** Lease TTL for a publish: long enough to clone + fetch-bundle + CAS-push. */
 const PUBLISH_LEASE_TTL_SECONDS = 300;
 
+/** Max times a run re-snapshots + re-merges when a concurrent run beat it to the
+ *  base (base_moved). Bounds the rebase loop so a hot base can't spin forever. */
+const MAX_REBASE_ATTEMPTS = 3;
+
 const DO_BASE = "https://do";
 const stepRetry = { retries: { limit: 3, delay: "5 seconds" as const, backoff: "exponential" as const } };
 
@@ -66,72 +70,103 @@ export class IntegrationWorkflow extends WorkflowEntrypoint<WorkflowEnv, Integra
       return true;
     });
 
-    // Each zone call is its own durable step so a transient failure retries just
-    // that call. The tested runIntegration drives the sequence; the clients here
-    // record their results into the Workflow's step state. step.do returns a
-    // Serializable<T>; the casts restore the precise type (the shapes are plain
-    // JSON, so the runtime values match).
-    const outcome = await runIntegration(
-      {
-        io: {
-          snapshot: (req) => step.do("io:snapshot", stepRetry, () => io.snapshot(req)) as Promise<SnapshotResponse>,
-          // Publish is gated by the Base-Coordinator. begin acquires the base
-          // lease + CAS on the parent SHA; it is its own step that retries only
-          // while the base is BUSY (another run holds the lease). A stale base
-          // (base_moved) is thrown from this plain wrapper so runIntegration maps
-          // it to the base_moved outcome instead of retrying. On a granted lease,
-          // io.publish + the coordinator commit run as one step (abort on failure).
-          publish: async (req) => {
-            const begin = await step.do("coord:begin", stepRetry, async () => {
-              const r = await coordinator.begin(job.baseKey, job.runId, req.baseSha, PUBLISH_LEASE_TTL_SECONDS);
-              if (r.status === "busy") throw new Error(`base ${job.baseKey} busy (held by ${r.holder}); retrying`);
-              return r; // granted | base_moved
-            });
-            if (begin.status === "base_moved") throw new BaseMovedError();
-            return step.do("io:publish", stepRetry, async () => {
-              try {
-                const pub = await io.publish(req);
-                const commit = await coordinator.commit(job.baseKey, job.runId, pub.pushedSha);
-                if (commit.status !== "ok") throw new Error(`coordinator commit rejected: ${commit.status}`);
-                return pub;
-              } catch (e) {
-                await coordinator.abort(job.baseKey, job.runId);
-                throw e;
-              }
-            }) as Promise<PublishResponse>;
-          },
-        },
-        compute: {
-          integrate: (req) =>
-            step.do("compute:integrate", stepRetry, () => compute.integrate(req)) as Promise<IntegrateResponse>,
-        },
-        emit: async (e: RunEvent) => {
-          await step.do(`emit:${e.type}`, stepRetry, async () => {
-            await this.postEvent(job, e);
-            return true;
-          });
-        },
-        recordPush: async (sha: string) => {
-          await step.do("record:push", stepRetry, async () => {
-            await this.recordPush(job.runId, sha);
-            return true;
-          });
-        },
-        record: ledger
-          ? async (kind, payload) => {
-              await step.do(`ledger:${kind}`, stepRetry, async () => {
-                await ledger.append(job.runId, kind, payload);
-                return true;
-              });
-            }
-          : undefined,
-        now: () => new Date().toISOString(),
-      },
-      job,
-    );
+    // A monotonic counter gives every emitted event a unique step name (the same
+    // event type recurs, and Workflows memoize steps by name). It increments
+    // deterministically on replay, so names stay stable.
+    let emitSeq = 0;
 
-    // Reconcile the lifecycle record with the outcome (succeeded/failed/...).
+    // buildDeps wires runIntegration for one attempt. Step names are suffixed with
+    // the attempt number so a rebase re-executes the pipeline instead of replaying
+    // the previous attempt's memoized results. step.do returns Serializable<T>;
+    // the casts restore the precise type (shapes are plain JSON).
+    const buildDeps = (attempt: number) => ({
+      io: {
+        snapshot: (req: Parameters<typeof io.snapshot>[0]) =>
+          step.do(`io:snapshot@${attempt}`, stepRetry, () => io.snapshot(req)) as Promise<SnapshotResponse>,
+        // Publish is gated by the Base-Coordinator. coord:begin acquires the base
+        // lease + CAS on the parent SHA; it retries only while the base is BUSY.
+        // A stale base (base_moved) is thrown so runIntegration returns the
+        // base_moved outcome, which the loop below turns into a rebase. On a grant,
+        // io.publish + commit run as one step (abort on failure).
+        publish: async (req: Parameters<typeof io.publish>[0]) => {
+          const begin = await step.do(`coord:begin@${attempt}`, stepRetry, async () => {
+            const r = await coordinator.begin(job.baseKey, job.runId, req.baseSha, PUBLISH_LEASE_TTL_SECONDS);
+            if (r.status === "busy") throw new Error(`base ${job.baseKey} busy (held by ${r.holder}); retrying`);
+            return r; // granted | base_moved
+          });
+          if (begin.status === "base_moved") throw new BaseMovedError();
+          // io.publish can still fail the GIT-level CAS (gitio --force-with-lease)
+          // if the base moved between the coordinator grant and the push — the
+          // coordinator reduces that race but git is the ultimate guard. Return
+          // base_moved as a VALUE so the step does not retry it (a retry would just
+          // fail the same way); a genuine error (e.g. a transient clone 502) still
+          // throws and retries. Then re-throw base_moved in plain code so
+          // runIntegration maps it to the outcome the rebase loop acts on.
+          const result = (await step.do(`io:publish@${attempt}`, stepRetry, async () => {
+            try {
+              const pub = await io.publish(req);
+              const commit = await coordinator.commit(job.baseKey, job.runId, pub.pushedSha);
+              if (commit.status !== "ok") throw new Error(`coordinator commit rejected: ${commit.status}`);
+              return { ok: true as const, pub };
+            } catch (e) {
+              await coordinator.abort(job.baseKey, job.runId);
+              if (e instanceof BaseMovedError) return { ok: false as const };
+              throw e; // genuine/transient error -> retry the step
+            }
+          })) as { ok: true; pub: PublishResponse } | { ok: false };
+          if (!result.ok) throw new BaseMovedError();
+          return result.pub;
+        },
+      },
+      compute: {
+        integrate: (req: Parameters<typeof compute.integrate>[0]) =>
+          step.do(`compute:integrate@${attempt}`, stepRetry, () => compute.integrate(req)) as Promise<IntegrateResponse>,
+      },
+      emit: async (e: RunEvent) => {
+        await step.do(`emit:${emitSeq++}:${e.type}`, stepRetry, async () => {
+          await this.postEvent(job, e);
+          return true;
+        });
+      },
+      recordPush: async (sha: string) => {
+        await step.do(`record:push@${attempt}`, stepRetry, async () => {
+          await this.recordPush(job.runId, sha);
+          return true;
+        });
+      },
+      record: ledger
+        ? async (kind: string, payload: Record<string, string>) => {
+            await step.do(`ledger@${attempt}:${kind}`, stepRetry, async () => {
+              await ledger.append(job.runId, kind, payload);
+              return true;
+            });
+          }
+        : undefined,
+      now: () => new Date().toISOString(),
+    });
+
+    // Rebase loop (Phase 4a): a base_moved outcome means a concurrent run advanced
+    // the base between this run's snapshot and its publish. Re-running the pipeline
+    // re-snapshots the NOW-current base (the agent forks are unchanged), so the
+    // retry naturally rebases onto the new tip. Bounded, so a hot base can't loop
+    // forever; exhaustion is a terminal failure, never a stuck run.
+    let outcome = await runIntegration(buildDeps(1), job);
+    for (let attempt = 2; outcome.status === "base_moved" && attempt <= MAX_REBASE_ATTEMPTS; attempt++) {
+      await step.do(`rebase:${attempt}`, stepRetry, async () => {
+        await this.postEvent(job, { type: "log", line: `base advanced — rebasing (attempt ${attempt}/${MAX_REBASE_ATTEMPTS})` });
+        return true;
+      });
+      outcome = await runIntegration(buildDeps(attempt), job);
+    }
+
+    // Reconcile the lifecycle record with the outcome. A still-base_moved outcome
+    // after the last attempt is a terminal failure (rebase exhausted).
     await step.do("lifecycle:finalize", stepRetry, async () => {
+      if (outcome.status === "base_moved") {
+        await this.postEvent(job, { type: "log", line: `rebase exhausted after ${MAX_REBASE_ATTEMPTS} attempts — failing` });
+        await this.advance(job.runId, "fail", "rebase exhausted", { verdict: "base_moved" });
+        return true;
+      }
       const action = outcomeToAction(outcome.status);
       if (action) {
         await this.advance(job.runId, action, outcome.verdict, {
