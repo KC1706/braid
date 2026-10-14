@@ -5,6 +5,7 @@ import {
   transition,
   isTerminal,
   type Run,
+  type RunStatus,
 } from "../src/v1/lifecycle";
 
 const at = (s: string) => `2026-10-14T00:00:0${s}Z`;
@@ -40,8 +41,8 @@ describe("transition", () => {
 
 describe("isTerminal", () => {
   it("marks exactly the terminal states", () => {
-    expect(["succeeded", "failed", "incompatible", "canceled"].every(isTerminal)).toBe(true);
-    expect(["queued", "running", "awaiting_approval"].some(isTerminal)).toBe(false);
+    expect((["succeeded", "failed", "incompatible", "canceled"] as RunStatus[]).every(isTerminal)).toBe(true);
+    expect((["queued", "running", "awaiting_approval"] as RunStatus[]).some(isTerminal)).toBe(false);
   });
 });
 

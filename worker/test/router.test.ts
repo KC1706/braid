@@ -66,7 +66,7 @@ describe("POST /v1/runs", () => {
     const d = deps();
     const res = await handleV1(post("/v1/runs", "op", { base: "b", agents: ["a1", "a2"], task: "t" }), d);
     expect(res!.status).toBe(201);
-    const body = await res!.json();
+    const body = await res!.json() as any;
     expect(body).toMatchObject({ id: "run-1", status: "queued", base: "b", eventSecret: "secret-xyz" });
     expect(body.forks).toHaveLength(2);
     expect(d.enqueued).toHaveLength(1);
@@ -86,9 +86,9 @@ describe("POST /v1/runs", () => {
   it("replays the same result for a repeated Idempotency-Key, and does not double-fork", async () => {
     const d = deps();
     const first = await handleV1(post("/v1/runs", "op", { base: "b" }, { "idempotency-key": "k1" }), d);
-    const firstBody = await first!.json();
+    const firstBody = await first!.json() as any;
     const retry = await handleV1(post("/v1/runs", "op", { base: "b" }, { "idempotency-key": "k1" }), d);
-    const retryBody = await retry!.json();
+    const retryBody = await retry!.json() as any;
     expect(retry!.status).toBe(201);
     expect(retryBody).toEqual(firstBody); // same id, verbatim
     expect(d.enqueued).toHaveLength(1); // enqueued once, not twice
@@ -109,7 +109,7 @@ describe("GET /v1/runs/:id", () => {
     await handleV1(post("/v1/runs", "op", { base: "b" }), d);
     const res = await handleV1(get("/v1/runs/run-1", "view"), d);
     expect(res!.status).toBe(200);
-    const body = await res!.json();
+    const body = await res!.json() as any;
     expect(body.id).toBe("run-1");
     expect(body.eventSecret).toBeUndefined();
     expect((await handleV1(get("/v1/runs/nope", "view"), d))!.status).toBe(404);
@@ -122,7 +122,7 @@ describe("lifecycle actions", () => {
     await handleV1(post("/v1/runs", "op", { base: "b" }), d);
     const c1 = await handleV1(post("/v1/runs/run-1/cancel", "op"), d);
     expect(c1!.status).toBe(200);
-    expect((await c1!.json()).status).toBe("canceled");
+    expect(((await c1!.json()) as any).status).toBe("canceled");
     const c2 = await handleV1(post("/v1/runs/run-1/cancel", "op"), d);
     expect(c2!.status).toBe(409); // terminal
   });
