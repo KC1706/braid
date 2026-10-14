@@ -3,7 +3,7 @@
 > Cross-session memory. Update this at the end of every work session: what changed, what's next,
 > what's blocked. Newest entry on top. See `plan.md` for the full plan.
 
-**Deadline:** 2026-10-14 · **Today:** 2026-10-14 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1–3 COMPLETE & DEPLOYED LIVE** + **Phase 4a/4b DONE** on `braid-worker.kunalchandoa925.workers.dev` (account `06bff0b6…`). Base-Coordinator (per-base lease + parent-SHA CAS) is live and the **Phase-4 concurrency gate PASSED live** — two concurrent same-base runs: one published, the other was CAS-rejected (base_moved), base intact, no duplicate. Signed tamper-evident ledger (`internal/ledger`) built + unit-proven. Next = Phase 4 finish (auto-rebase the base_moved loser; wire ledger → R2 per-step; 4c seq-numbered events) then Phase 5 (console). (hackathon submission on hold — user pivot)
+**Deadline:** 2026-10-14 · **Today:** 2026-10-14 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1–3 COMPLETE & DEPLOYED LIVE** + **Phase 4a/4b DONE & LIVE** on `braid-worker.kunalchandoa925.workers.dev` (account `06bff0b6…`). Base-Coordinator (per-base lease + parent-SHA CAS) live + **concurrency gate PASSED** (two concurrent same-base runs: one published, the other CAS-rejected, base intact, no duplicate). Signed ledger in R2 live + **tamper-evidence gate PASSED cross-language** (Worker writes a signed chain, `braid ledger verify` validates it with only the public key; mutation + hash-reforge both detected). Next = auto-rebase the base_moved loser; 4c seq-numbered events; then Phase 5 (console). (hackathon submission on hold — user pivot)
 
 ## ✅ 2026-10-14 — Phase 4a + 4b: Base-Coordinator (live concurrency gate PASSED) + signed ledger
 - **4a Base-Coordinator (C8) — DEPLOYED & PROVEN LIVE.** One coordinator per base serializes publishes in
@@ -36,7 +36,22 @@
   state. (3) each run gets its own compute/io container instance (`*-${runId}`) → per-run isolation (good for
   security) at the cost of a cold start per run.
 
-## ✅ 2026-10-14 — Phase 4b ledger WIRED into runs (code-complete; deploy blocked on R2 activation)
+## ✅ 2026-10-14 — Phase 4b ledger DEPLOYED & live-gate PASSED (signed provenance in R2, cross-language verify)
+- R2 enabled on the account; bucket `braid-ledger` created; `LEDGER_SIGNING_SEED` secret set; worker redeployed
+  (version `1949e7a5`, image rebuilt to include the ledger code).
+- **LIVE GATE PASSED, end-to-end + cross-language:** a real run (`POST /v1/runs`, green) had the **Worker (TS/
+  WebCrypto Ed25519) write a 3-record signed chain to R2** (`snapshot` → `verify` → `publish`). Fetched it via
+  `GET /v1/runs/:id/ledger` and **verified with the Go CLI using ONLY the public key**
+  (`cf2793e38b…`): “✓ verified — 3 records, chain intact and every signature valid.”
+- **Tamper-evidence demonstrated on the live chain:** (1) mutating the verify record's verdict green→red →
+  `braid ledger verify` reports **content hash mismatch** at record 1; (2) an attacker who also recomputes the
+  content hash (the length-prefixed format replicated in Python) is still caught by **invalid signature** at
+  record 2 — the Ed25519 key lives only as the Worker secret, so the chain can't be forged.
+- Phase 4b is DONE. The Go `internal/ledger` is the canonical offline verifier/CLI; the TS writer is byte-locked
+  to it by the shared vector. (The genesis `snapshot` baseline + both forks share a SHA because agents push work
+  after forking in the real flow; the merge still produced a distinct `e8574427` published commit.)
+
+## ✅ 2026-10-14 — Phase 4b ledger WIRED into runs (code-complete; superseded by the entry above)
 - The signed ledger now records a per-step entry during a run, **byte-compatible with the Go verifier** so an
   auditor validates the chain offline with only the public key.
   - `braid ledger` CLI: `keygen` (Ed25519 seed + pub) and `verify -pubkey <hex> [-file]` (verify a records JSON
