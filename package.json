@@ -2,19 +2,16 @@
   "name": "braid",
   "version": "0.1.0",
   "private": true,
-  "description": "Git for a thousand concurrent agents — a hybrid, test-verified merge engine on Cloudflare.",
+  "description": "A hybrid, test-verified merge engine for concurrent AI agents, on Cloudflare.",
   "license": "MIT",
   "type": "module",
   "workspaces": [
-    "baseline",
-    "integrator",
-    "agent",
     "worker",
     "dashboard"
   ],
   "scripts": {
-    "demo": "npm -w integrator run demo",
-    "test": "npm -w integrator test && npm -w baseline test"
+    "test": "npm -w worker test",
+    "deploy": "npm -w worker run deploy"
   },
   "engines": {
     "node": ">=20"
