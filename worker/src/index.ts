@@ -15,6 +15,15 @@ import { newSecret as newRunSecret, verify as verifyHmac, SIGNATURE_HEADER } fro
 import type { Run } from "./v1/lifecycle";
 import type { IntegrationJob } from "./v1/integration";
 import { R2LedgerStore, type R2Like } from "./v1/ledger";
+import {
+  emptyState,
+  reduce,
+  rebuild,
+  type BraidEvent,
+  type EventMeta,
+  type LoggedEvent,
+  type RunState,
+} from "./v1/runstate";
 
 // Phase 3c classes the runtime instantiates (Containers + the durable consumer).
 export { ComputeZone, IOZone } from "./containers";
@@ -247,180 +256,72 @@ export default {
 // subscribed dashboard over WebSocket.
 // ───────────────────────────────────────────────────────────────────────────
 
-type BraidEvent = Record<string, any> & { type: string };
-
-interface AgentView {
-  id: string;
-  branch: string;
-  intent: string;
-  status: string; // spawned | forked | coding | pushed
-  merge: string; // waiting | merging | auto-merged | conflict | resolved | verified
-  files: string[];
-  test: string;
-}
-
-interface RunState {
-  runId: string;
-  task: string;
-  mode: string;
-  startedAt: number;
-  updatedAt: number;
-  phase: string; // init | swarming | integrating | done
-  base: { name: string; remote: string } | null;
-  agents: Record<string, AgentView>;
-  agentOrder: string[];
-  conflicts: {
-    agent: string;
-    path: string;
-    strategy: string;
-    attempts: number;
-    verified: string;
-    status: string; // resolving | resolved
-  }[];
-  result: { green: boolean; finalTest: string; mergedSha: string; summary: Record<string, number>; usersFile?: string } | null;
-  log: { ts: number; line: string }[];
-}
-
-function emptyState(runId: string): RunState {
-  return {
-    runId,
-    task: "",
-    mode: "",
-    startedAt: Date.now(),
-    updatedAt: Date.now(),
-    phase: "init",
-    base: null,
-    agents: {},
-    agentOrder: [],
-    conflicts: [],
-    result: null,
-    log: [],
-  };
-}
-
-function pushLog(s: RunState, line: string) {
-  s.log.push({ ts: Date.now(), line });
-  if (s.log.length > 200) s.log.shift();
-}
-
-/** Pure reducer: fold one event into the run state. */
-function reduce(s: RunState, e: BraidEvent): RunState {
-  s.updatedAt = Date.now();
-  switch (e.type) {
-    case "run:init": {
-      s.task = e.task;
-      s.mode = e.mode;
-      s.phase = "swarming";
-      for (const a of e.agents as { id: string; branch: string; intent: string }[]) {
-        s.agents[a.id] = { id: a.id, branch: a.branch, intent: a.intent, status: "spawned", merge: "waiting", files: [], test: "" };
-        if (!s.agentOrder.includes(a.id)) s.agentOrder.push(a.id);
-      }
-      pushLog(s, `run started — ${e.agents.length} agents · ${e.mode}`);
-      break;
-    }
-    case "base:ready":
-      s.base = { name: e.name, remote: e.remote };
-      pushLog(s, `base repo ready: ${e.name}`);
-      break;
-    case "agent:status": {
-      const a = s.agents[e.agent];
-      if (a) a.status = e.status;
-      pushLog(s, `${e.agent}: ${e.status}${e.detail ? ` — ${e.detail}` : ""}`);
-      break;
-    }
-    case "merge:start": {
-      s.phase = "integrating";
-      const a = s.agents[e.agent];
-      if (a) a.merge = "merging";
-      // scope "all" (Phase 3c) = the whole fold; a named agent = the linear path.
-      pushLog(s, e.agent ? `integrating ${e.agent}…` : `integrating ${e.scope === "all" ? "all agents" : "merge"}…`);
-      break;
-    }
-    case "merge:auto": {
-      const a = s.agents[e.agent];
-      if (a) {
-        a.merge = "auto-merged";
-        a.files = e.files;
-      }
-      pushLog(s, `${e.agent}: git auto-merged ${e.files.length} file(s) — no AI`);
-      break;
-    }
-    case "conflict:detected": {
-      const a = s.agents[e.agent];
-      if (a) a.merge = "conflict";
-      for (const path of e.files as string[]) {
-        if (!s.conflicts.find((c) => c.agent === e.agent && c.path === path)) {
-          s.conflicts.push({ agent: e.agent, path, strategy: "?", attempts: 0, verified: "", status: "resolving" });
-        }
-      }
-      pushLog(s, `${e.agent}: ⚡ conflict in ${(e.files as string[]).join(", ")}`);
-      break;
-    }
-    case "conflict:attempt": {
-      const c = s.conflicts.find((c) => c.agent === e.agent && c.path === e.path);
-      if (c) {
-        c.strategy = e.strategy;
-        c.attempts = e.attempt;
-        c.status = "resolving";
-      }
-      pushLog(s, `${e.agent}: resolving ${e.path} via ${e.strategy} (attempt ${e.attempt})`);
-      break;
-    }
-    case "conflict:resolved": {
-      const c = s.conflicts.find((c) => c.agent === e.agent && c.path === e.path);
-      if (c) {
-        c.strategy = e.strategy;
-        c.attempts = e.attempts;
-        c.verified = e.verified;
-        c.status = "resolved";
-      }
-      const a = s.agents[e.agent];
-      if (a) a.merge = "resolved";
-      pushLog(s, `${e.agent}: ✓ ${e.path} resolved via ${e.strategy} — ${e.verified}`);
-      break;
-    }
-    case "verify": {
-      if (e.scope !== "final") {
-        const a = s.agents[e.scope];
-        if (a) {
-          a.test = e.summary;
-          if (e.passed && a.merge !== "auto-merged") a.merge = "verified";
-        }
-      }
-      pushLog(s, `${e.scope === "final" ? "final" : e.scope} tests: ${e.passed ? "✅" : "❌"} ${e.summary}`);
-      break;
-    }
-    case "run:done":
-      s.phase = "done";
-      s.result = { green: e.green, finalTest: e.finalTest, mergedSha: e.mergedSha, summary: e.summary, usersFile: e.usersFile };
-      pushLog(s, `run ${e.green ? "GREEN ✅" : "RED ❌"} — ${e.finalTest}`);
-      break;
-    case "log":
-      pushLog(s, e.line);
-      break;
-  }
-  return s;
-}
+// Phase 4c tuning: offload an event body larger than this (bytes) to R2, keeping
+// the DO log entry a small blob reference; snapshot the projection every N events
+// so a rebuild can start from the latest checkpoint + tail.
+const EVENT_BLOB_THRESHOLD = 8 * 1024;
+const SNAPSHOT_EVERY = 50;
+const seqKey = (seq: number) => `evt:${String(seq).padStart(9, "0")}`;
 
 export class Orchestrator {
   private state!: RunState;
+  private lastSeq = 0;
   private loaded: Promise<void>;
 
   constructor(private ctx: DurableObjectState, private env: Env) {
     this.loaded = this.ctx.blockConcurrencyWhile(async () => {
       const stored = await this.ctx.storage.get<RunState>("state");
-      this.state = stored ?? emptyState("run");
+      this.state = stored ?? emptyState("run", Date.now());
+      this.lastSeq = (await this.ctx.storage.get<number>("lastSeq")) ?? this.state.seq ?? 0;
     });
   }
 
   private broadcast() {
-    const msg = JSON.stringify({ type: "state", state: this.state });
+    const msg = JSON.stringify({ type: "state", state: this.state, seq: this.lastSeq });
     for (const ws of this.ctx.getWebSockets()) {
       try {
         ws.send(msg);
       } catch {
         /* socket closing */
       }
+    }
+  }
+
+  /** readLog returns the run's event log from `since` (exclusive), rehydrating any
+   *  R2-offloaded event bodies. The log is the authority the projection rebuilds from. */
+  private async readLog(since = 0): Promise<LoggedEvent[]> {
+    const start = seqKey(since + 1);
+    const map = await this.ctx.storage.list<LoggedEvent | { meta: EventMeta; blobKey: string }>({
+      prefix: "evt:",
+      start,
+    });
+    const out: LoggedEvent[] = [];
+    for (const entry of map.values()) {
+      if ("blobKey" in entry) {
+        const body = this.env.LEDGER ? await this.env.LEDGER.get(entry.blobKey) : null;
+        out.push({ meta: entry.meta, event: body ? (JSON.parse(await body.text()) as BraidEvent) : { type: "log", line: "[event body unavailable]" } });
+      } else {
+        out.push(entry);
+      }
+    }
+    return out;
+  }
+
+  /** append persists one event under its seq, offloading an oversized body to R2
+   *  so the DO entry stays small, and checkpoints the projection periodically. */
+  private async append(seq: number, event: BraidEvent, meta: EventMeta): Promise<void> {
+    const body = JSON.stringify(event);
+    if (body.length > EVENT_BLOB_THRESHOLD && this.env.LEDGER) {
+      const blobKey = `events/${this.state.runId}/${String(seq).padStart(9, "0")}.json`;
+      await this.env.LEDGER.put(blobKey, body);
+      await this.ctx.storage.put(seqKey(seq), { meta, blobKey });
+    } else {
+      await this.ctx.storage.put(seqKey(seq), { meta, event } satisfies LoggedEvent);
+    }
+    await this.ctx.storage.put("lastSeq", seq);
+    await this.ctx.storage.put("state", this.state);
+    if (seq % SNAPSHOT_EVERY === 0) {
+      await this.ctx.storage.put("snapshot", this.state);
     }
   }
 
@@ -518,10 +419,14 @@ export class Orchestrator {
       if (!event || typeof event.type !== "string") {
         return json({ error: "invalid event" }, 400);
       }
-      reduce(this.state, event);
-      await this.ctx.storage.put("state", this.state);
+      // Assign a monotonic seq + receive timestamp, fold deterministically, and
+      // append to the seq-log (the rebuildable source; the projection is a cache).
+      const seq = ++this.lastSeq;
+      const meta: EventMeta = { seq, ts: Date.now() };
+      reduce(this.state, event, meta);
+      await this.append(seq, event, meta);
       this.broadcast();
-      return json({ ok: true });
+      return json({ ok: true, seq });
     }
 
     // Snapshot for polling / debugging.
@@ -529,10 +434,28 @@ export class Orchestrator {
       return json(this.state);
     }
 
-    // Wipe a run (demo reset).
+    // The seq-numbered event log from ?since=<seq> (exclusive) — for resume + audit.
+    if (sub === "/events") {
+      const since = Number(url.searchParams.get("since") ?? "0") || 0;
+      return json({ runId, lastSeq: this.lastSeq, events: await this.readLog(since) });
+    }
+
+    // Rebuild the projection from the persisted log (resuming from the snapshot if
+    // present) and return it — proof the state is reconstructable from events.
+    if (sub === "/rebuild") {
+      const snapshot = await this.ctx.storage.get<RunState>("snapshot");
+      const since = snapshot?.seq ?? 0;
+      const rebuilt = rebuild(runId, await this.readLog(since), snapshot ?? undefined);
+      return json(rebuilt);
+    }
+
+    // Wipe a run (demo reset): clear the projection AND the seq-log.
     if (sub === "/reset" && req.method === "POST") {
-      this.state = emptyState(runId);
+      this.state = emptyState(runId, Date.now());
+      this.lastSeq = 0;
+      await this.ctx.storage.deleteAll();
       await this.ctx.storage.put("state", this.state);
+      await this.ctx.storage.put("lastSeq", 0);
       this.broadcast();
       return json({ ok: true });
     }
