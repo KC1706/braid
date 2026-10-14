@@ -3,7 +3,7 @@
 > Cross-session memory. Update this at the end of every work session: what changed, what's next,
 > what's blocked. Newest entry on top. See `plan.md` for the full plan.
 
-**Deadline:** 2026-10-14 · **Today:** 2026-10-14 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1–3 COMPLETE & DEPLOYED LIVE** + **Phase 4a/4b DONE & LIVE** on `braid-worker.kunalchandoa925.workers.dev` (account `06bff0b6…`). Base-Coordinator (per-base lease + parent-SHA CAS) live + **concurrency gate PASSED** (two concurrent same-base runs: one published, the other CAS-rejected, base intact, no duplicate). Signed ledger in R2 live + **tamper-evidence gate PASSED cross-language** (Worker writes a signed chain, `braid ledger verify` validates it with only the public key; mutation + hash-reforge both detected). **Auto-rebase DONE & live-proven** (the CAS-losing run re-snapshots + re-merges onto the winner and succeeds — `rebase:2` fired live). Next = 4c (seq-numbered Orchestrator events + R2 blobs); then Phase 5 (console). (hackathon submission on hold — user pivot)
+**Deadline:** 2026-10-14 · **Today:** 2026-10-14 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1–3 COMPLETE & DEPLOYED LIVE** + **Phase 4a/4b DONE & LIVE** on `braid-worker.kunalchandoa925.workers.dev` (account `06bff0b6…`). Base-Coordinator (per-base lease + parent-SHA CAS) live + **concurrency gate PASSED** (two concurrent same-base runs: one published, the other CAS-rejected, base intact, no duplicate). Signed ledger in R2 live + **tamper-evidence gate PASSED cross-language** (Worker writes a signed chain, `braid ledger verify` validates it with only the public key; mutation + hash-reforge both detected). **Auto-rebase DONE & live-proven** (`rebase:2` fired live). **4c DONE & live-proven** — seq-numbered append-only event log + snapshots + R2 blob offload; `GET /rebuild` reconstructs a byte-identical projection from the log (`REBUILD == LIVE STATE: True`). **Phase 4 COMPLETE.** Next = Phase 5 (operator console — the plan says build it last). (hackathon submission on hold — user pivot)
 
 ## ✅ 2026-10-14 — Phase 4a + 4b: Base-Coordinator (live concurrency gate PASSED) + signed ledger
 - **4a Base-Coordinator (C8) — DEPLOYED & PROVEN LIVE.** One coordinator per base serializes publishes in
@@ -30,10 +30,27 @@
 - **Phase-4 exit gate status:** no non-fast-forward data loss ✅ (live), no duplicate runs ✅ (live), ledger
   tamper-evident ✅ (unit), no self-trigger ✅ (`isSelfPush` + guard store; external Artifacts→Worker webhook
   still unwired so nothing can loop yet). Commits `297442c` (ledger), `b0677a3` (coordinator), this doc.
-- **Known Phase-4 follow-ups:** (1) ✅ DONE — auto-rebase (see entry below). (2) 4c (seq-numbered Orchestrator
-  events + blobs→R2, rebuildable) not started; the DO already persists reduced state. (3) each run gets its own
-  compute/io container instance (`*-${runId}`) → per-run isolation (good for security) at the cost of a cold
-  start per run.
+- **Phase-4 follow-ups:** (1) ✅ DONE — auto-rebase. (2) ✅ DONE — 4c seq-numbered events + snapshots + R2 blobs,
+  rebuildable. (3) each run gets its own compute/io container instance (`*-${runId}`) → per-run isolation (good
+  for security) at the cost of a cold start per run (a warm pool is a Phase-6 scale item).
+
+## ✅ 2026-10-14 — Phase 4c DONE & PROVEN LIVE: seq-numbered event log, snapshots, R2 blob offload, rebuildable
+- The Orchestrator DO is now an **outbox over an append-only, seq-numbered event log** (git stays the source of
+  truth; the projection is a cache — C10/C11).
+  - `worker/src/v1/runstate.ts` — the run-state reducer extracted from `index.ts` as a PURE, DETERMINISTIC module:
+    time + seq arrive via `EventMeta` (never `Date.now()`), and `startedAt` is anchored to the first event, so
+    replaying the same log reproduces the state byte-for-byte. Adds a `seq` field + `rebuild(log, from?)` (folds
+    the log, resuming from a snapshot and skipping already-applied seqs). 7 unit tests (determinism, projected
+    shape, rebuild == incremental fold, snapshot-resume, idempotent replay, log-anchored startedAt).
+  - Orchestrator DO: each `/event` gets a monotonic seq + receive ts, is folded, and appended at `evt:<padded>`;
+    an oversized body (>8 KB) offloads to the R2 bucket with a small blob ref in the DO (rehydrated on read).
+    Snapshots the projection every 50 events. New routes `GET /runs/:id/events?since=<seq>` (resume/audit) and
+    `GET /runs/:id/rebuild` (reconstruct from the log). WS broadcast carries `seq`.
+  - `runIntegration` emits `run:init` (task + agent roster) as the first event, so the projection is fully
+    rebuildable from the log alone (no `/init` side channel dependency) and the dashboard gets the agents.
+- **PROVEN LIVE:** a real run produced a 6-event seq-log (`run:init→log→log→merge:start→verify→run:done`);
+  `GET /rebuild` reconstructed a state **byte-identical to the live `/state`** (`REBUILD == LIVE STATE: True`),
+  including task + agents. Commits `35472a7`, `9ebed06`; deploy `08766402`.
 
 ## ✅ 2026-10-14 — Phase 4a auto-rebase DONE & PROVEN LIVE (the CAS loser self-heals)
 - A `base_moved` run now re-snapshots the advanced base and re-merges instead of sitting in `running` until
