@@ -103,6 +103,27 @@ type IncompatibilityRecord struct {
 	Note        string   `json:"note"`
 }
 
+// ContractViolation is one Rung-5 metamorphic failure: a behavior an agent
+// established on its own fork that the merged tree no longer satisfies. It is the
+// model-layer mirror of contract.Violation, carried in the trail.
+type ContractViolation struct {
+	Agent  string `json:"agent"`
+	Check  string `json:"check"`
+	Test   string `json:"test,omitempty"`
+	Reason string `json:"reason"` // "regressed" | "did-not-run"
+	Detail string `json:"detail,omitempty"`
+}
+
+// MetamorphicRecord is the Rung-5 outcome recorded in the trail: whether every
+// agent's contract survived the merge, and the violations if not. Checked is the
+// number of contracts evaluated; a nil record means the rung did not run (no
+// contracts supplied).
+type MetamorphicRecord struct {
+	Passed     bool                `json:"passed"`
+	Checked    int                 `json:"checked"`
+	Violations []ContractViolation `json:"violations,omitempty"`
+}
+
 // VerificationRecord is the deciding ladder verdict for the final merged tree,
 // recorded in the trail.
 type VerificationRecord struct {
@@ -132,6 +153,7 @@ type Trail struct {
 	Verdict           Verdict                 `json:"verdict,omitempty"`
 	FinalTest         string                  `json:"finalTest"`
 	FinalVerification *VerificationRecord     `json:"finalVerification,omitempty"`
+	Metamorphic       *MetamorphicRecord      `json:"metamorphic,omitempty"`
 	Summary           TrailSummary            `json:"summary"`
 }
 

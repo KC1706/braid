@@ -205,6 +205,98 @@ func TestMetamorphicBothFeaturesSurvive(t *testing.T) {
 	}
 }
 
+// phasedRunner passes every check on the fork snapshots (the first len(forks)
+// calls, one per contract), then, on the merged-tree preservation pass, fails
+// the named agent's check — simulating a feature that did not survive. It lets an
+// engine-level test drive the Rung-5 red path without crafting a breaking merge.
+type phasedRunner struct {
+	contracts int
+	calls     int
+	failAgent string // which agent's check to fail on the merged pass
+}
+
+func (p *phasedRunner) RunCheck(_ context.Context, _ string, c contract.Check) (contract.CheckResult, error) {
+	p.calls++
+	merged := p.calls > p.contracts // forks are snapshotted first, then the merge
+	res := contract.CheckResult{Check: c.Name, Ran: true, Passed: true}
+	if merged && c.Test == "TestRatelimit" && p.failAgent == "agent-2" {
+		res.Passed = false
+		res.Detail = "injected regression"
+	}
+	return res, nil
+}
+
+// TestIntegrateMetamorphicGreenPath wires real contracts through Integrate and
+// confirms the engine records a passing Rung-5 (both contracts checked) and stays
+// green when every feature survives.
+func TestIntegrateMetamorphicGreenPath(t *testing.T) {
+	dir := initRepo(t)
+	commitBaseline(t, dir, map[string]string{
+		"go.mod":       "module example.com/app\n\ngo 1.26\n",
+		"app.go":       mmBase,
+		"base_test.go": mmBaseTest,
+	})
+	makeBranch(t, dir, "agent/validation", map[string]string{"app.go": mmValidation, "validation_test.go": mmValidationTest})
+	makeBranch(t, dir, "agent/ratelimit", map[string]string{"app.go": mmRatelimit, "ratelimit_test.go": mmRatelimitTest})
+
+	res, err := Integrate(context.Background(), Options{
+		RepoDir: dir, Baseline: "baseline", Task: "metamorphic-green",
+		Agents: []AgentInput{
+			{ID: "agent-1", Branch: "agent/validation", Intent: "input validation"},
+			{ID: "agent-2", Branch: "agent/ratelimit", Intent: "rate limiting"},
+		},
+		Resolver: resolver.UnionResolver{}, Ladder: newLadder(), MaxRetries: 2,
+		Contracts: mmContracts(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Green || res.Verdict != "green" {
+		t.Fatalf("want green, got verdict=%q green=%v", res.Verdict, res.Green)
+	}
+	m := res.Trail.Metamorphic
+	if m == nil || !m.Passed || m.Checked != 2 || len(m.Violations) != 0 {
+		t.Fatalf("metamorphic record wrong: %+v", m)
+	}
+}
+
+// TestIntegrateMetamorphicRedPath confirms the engine flips a build-and-test-green
+// merge to red when a contract does not survive, and records the violation.
+func TestIntegrateMetamorphicRedPath(t *testing.T) {
+	dir := initRepo(t)
+	commitBaseline(t, dir, map[string]string{
+		"go.mod":       "module example.com/app\n\ngo 1.26\n",
+		"app.go":       mmBase,
+		"base_test.go": mmBaseTest,
+	})
+	makeBranch(t, dir, "agent/validation", map[string]string{"app.go": mmValidation, "validation_test.go": mmValidationTest})
+	makeBranch(t, dir, "agent/ratelimit", map[string]string{"app.go": mmRatelimit, "ratelimit_test.go": mmRatelimitTest})
+
+	runner := &phasedRunner{contracts: 2, failAgent: "agent-2"}
+	res, err := Integrate(context.Background(), Options{
+		RepoDir: dir, Baseline: "baseline", Task: "metamorphic-red",
+		Agents: []AgentInput{
+			{ID: "agent-1", Branch: "agent/validation", Intent: "input validation"},
+			{ID: "agent-2", Branch: "agent/ratelimit", Intent: "rate limiting"},
+		},
+		Resolver: resolver.UnionResolver{}, Ladder: newLadder(), MaxRetries: 2,
+		Contracts: mmContracts(), MetamorphicRunner: runner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Green || res.Verdict != "red" {
+		t.Fatalf("want red from metamorphic, got verdict=%q green=%v", res.Verdict, res.Green)
+	}
+	m := res.Trail.Metamorphic
+	if m == nil || m.Passed || len(m.Violations) != 1 {
+		t.Fatalf("metamorphic record wrong: %+v", m)
+	}
+	if m.Violations[0].Agent != "agent-2" {
+		t.Fatalf("violation agent = %q, want agent-2", m.Violations[0].Agent)
+	}
+}
+
 // TestMetamorphicCatchesLostFeature proves the rung's teeth: a "pick-winner"
 // merge that keeps validation but drops the rate-limit call leaves a CLEAN BUILD
 // and a green-looking suite for the tests that remain — yet agent-2's contract

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/KC1706/braid/internal/contract"
 	"github.com/KC1706/braid/internal/determinism"
 	"github.com/KC1706/braid/internal/ladder"
 	"github.com/KC1706/braid/internal/policy"
@@ -44,8 +45,17 @@ type Options struct {
 	// order, e.g. an explicit pick-winner priority, keep it off); run.Service
 	// turns it on for production reproducibility.
 	CanonicalOrder bool
-	Log            func(string)
-	Emit           func(models.Event)
+	// Contracts, when supplied, enable the Rung-5 metamorphic gate: each agent's
+	// acceptance contract (keyed to its AgentInput.ID) is snapshotted on its own
+	// fork, then re-checked on the merged tree — a behavior that passed on a fork
+	// but no longer passes on the merge is a contract violation (the feature did
+	// not survive). Empty → the rung is skipped (GO_PRODUCTION_PLAN.md §3 2c).
+	Contracts []contract.Contract
+	// MetamorphicRunner runs the contract checks; nil defaults to the local
+	// go-test runner. A sandboxed executor plugs in here unchanged.
+	MetamorphicRunner contract.CheckRunner
+	Log               func(string)
+	Emit              func(models.Event)
 }
 
 // Result is the outcome of an integration run.
@@ -248,7 +258,24 @@ func Integrate(ctx context.Context, o Options) (Result, error) {
 	if runVerdict != models.VerdictIncompatible {
 		runVerdict = finalVerify.Verdict
 	}
-	green := runVerdict == models.VerdictGreen && finalVerify.Passed
+
+	// Rung 5 (metamorphic contract preservation): only meaningful once the ladder
+	// is otherwise green — a red merge has already failed. A surviving-behavior
+	// violation turns a build-and-test-green merge red (a feature silently didn't
+	// survive). The integration branch is restored before we return.
+	var metamorphic *models.MetamorphicRecord
+	if len(o.Contracts) > 0 && finalVerify.Passed {
+		rec, err := runMetamorphic(ctx, o, log, emit)
+		if err != nil {
+			return Result{}, err
+		}
+		metamorphic = rec
+		if !rec.Passed {
+			runVerdict = models.VerdictRed
+		}
+	}
+
+	green := runVerdict == models.VerdictGreen && finalVerify.Passed && (metamorphic == nil || metamorphic.Passed)
 
 	trail := models.Trail{
 		Task:              o.Task,
@@ -263,6 +290,7 @@ func Integrate(ctx context.Context, o Options) (Result, error) {
 		FinalVerification: &models.VerificationRecord{
 			Verdict: finalVerify.Verdict, Summary: finalVerify.Summary, Rungs: finalVerify.Rungs,
 		},
+		Metamorphic: metamorphic,
 		Summary: models.TrailSummary{
 			AgentsMerged:      countMerged(agentRecords),
 			FilesAutoMerged:   countAutoMerged(agentRecords),
@@ -279,6 +307,73 @@ func Integrate(ctx context.Context, o Options) (Result, error) {
 		return Result{}, err
 	}
 	return Result{MergedSHA: finalSHA, Trail: trail, Green: green, Verdict: runVerdict}, nil
+}
+
+// runMetamorphic executes the Rung-5 gate. For every supplied contract whose
+// agent was actually integrated, it checks out that agent's fork and snapshots
+// the contract's observable behavior (the golden), restores the integration
+// branch, then asserts the merged tree still satisfies every golden. A violation
+// (passed on the fork, no longer on the merge) means a feature did not survive.
+func runMetamorphic(ctx context.Context, o Options, log func(string), emit func(models.Event)) (*models.MetamorphicRecord, error) {
+	runner := o.MetamorphicRunner
+	if runner == nil {
+		runner = contract.GoTestRunner{}
+	}
+	branchByAgent := map[string]string{}
+	for _, a := range o.Agents {
+		branchByAgent[a.ID] = a.Branch
+	}
+
+	var active []contract.Contract
+	var forks []contract.Snapshot
+	for _, c := range o.Contracts {
+		branch, ok := branchByAgent[c.Agent]
+		if !ok {
+			continue // contract with no matching integrated agent: skip
+		}
+		if _, err := gitx.Ok(o.RepoDir, "checkout", "-q", branch); err != nil {
+			return nil, err
+		}
+		snap, err := contract.TakeSnapshot(ctx, o.RepoDir, c, runner)
+		if err != nil {
+			return nil, err
+		}
+		forks = append(forks, snap)
+		active = append(active, c)
+	}
+
+	// Restore the integration branch (the merged tree) before re-checking.
+	if _, err := gitx.Ok(o.RepoDir, "checkout", "-q", o.IntegrationBranch); err != nil {
+		return nil, err
+	}
+	if len(active) == 0 {
+		return &models.MetamorphicRecord{Passed: true}, nil
+	}
+
+	violations, err := contract.CheckPreservation(ctx, o.RepoDir, forks, active, runner)
+	if err != nil {
+		return nil, err
+	}
+	rec := &models.MetamorphicRecord{Passed: len(violations) == 0, Checked: len(active)}
+	for _, v := range violations {
+		rec.Violations = append(rec.Violations, models.ContractViolation{
+			Agent: v.Agent, Check: v.Check, Test: v.Test, Reason: v.Reason, Detail: v.Detail,
+		})
+		log(fmt.Sprintf("⚠ metamorphic: %s's %q did not survive the merge (%s)", v.Agent, v.Check, v.Reason))
+	}
+	emit(models.Event{
+		Type: "verify", Status: "metamorphic",
+		Verdict: metamorphicVerdict(rec.Passed),
+		Message: fmt.Sprintf("metamorphic: %d contract(s) checked, %d violation(s)", rec.Checked, len(rec.Violations)),
+	})
+	return rec, nil
+}
+
+func metamorphicVerdict(passed bool) models.Verdict {
+	if passed {
+		return models.VerdictGreen
+	}
+	return models.VerdictRed
 }
 
 // incompat captures why an agent could not be composed.
