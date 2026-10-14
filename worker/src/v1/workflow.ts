@@ -23,6 +23,7 @@ import {
 } from "./integration";
 import { sign, SIGNATURE_HEADER } from "./hmac";
 import { applyAction, type Run, type RunAction } from "./lifecycle";
+import { Ed25519Signer, LedgerWriter, R2LedgerStore, type R2Like } from "./ledger";
 
 /** The bindings the Workflow needs. */
 export interface WorkflowEnv {
@@ -33,6 +34,10 @@ export interface WorkflowEnv {
     idFromName(name: string): unknown;
     get(id: unknown): { fetch(req: Request): Promise<Response> };
   };
+  /** R2 bucket for the signed provenance ledger (Phase 4b). */
+  LEDGER?: R2Like;
+  /** Hex Ed25519 seed that signs ledger records. Unset -> ledger disabled. */
+  LEDGER_SIGNING_SEED?: string;
 }
 
 /** Lease TTL for a publish: long enough to clone + fetch-bundle + CAS-push. */
@@ -47,6 +52,12 @@ export class IntegrationWorkflow extends WorkflowEntrypoint<WorkflowEnv, Integra
     const io = new ContainerZoneClient(this.env.IO_ZONE, `io-${job.runId}`, true);
     const compute = new ContainerZoneClient(this.env.COMPUTE_ZONE, `compute-${job.runId}`, false);
     const coordinator = new BaseCoordinatorClient(this.env.BASE_COORDINATOR);
+    // Ledger is optional: only active when both the R2 bucket and the signing
+    // seed are configured. When off, record is a no-op (provenance is additive).
+    const ledger =
+      this.env.LEDGER && this.env.LEDGER_SIGNING_SEED
+        ? new LedgerWriter(new R2LedgerStore(this.env.LEDGER), new Ed25519Signer(this.env.LEDGER_SIGNING_SEED))
+        : null;
 
     // Claim the run: queued -> running. Idempotent — a Workflow replay re-runs this
     // step, and applyAction simply no-ops if the run already left queued.
@@ -106,6 +117,14 @@ export class IntegrationWorkflow extends WorkflowEntrypoint<WorkflowEnv, Integra
             return true;
           });
         },
+        record: ledger
+          ? async (kind, payload) => {
+              await step.do(`ledger:${kind}`, stepRetry, async () => {
+                await ledger.append(job.runId, kind, payload);
+                return true;
+              });
+            }
+          : undefined,
         now: () => new Date().toISOString(),
       },
       job,

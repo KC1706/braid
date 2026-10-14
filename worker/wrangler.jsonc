@@ -21,6 +21,11 @@
   "workflows": [
     { "name": "braid-integration", "binding": "INTEGRATION_WORKFLOW", "class_name": "IntegrationWorkflow" }
   ],
+  // Phase 4b: the signed provenance ledger lives in R2 (enable Object Lock on the
+  // bucket for physical WORM; one immutable object per record).
+  "r2_buckets": [
+    { "binding": "LEDGER", "bucket_name": "braid-ledger" }
+  ],
   "durable_objects": {
     "bindings": [
       { "name": "ORCHESTRATOR", "class_name": "Orchestrator" },

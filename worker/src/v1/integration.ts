@@ -44,6 +44,9 @@ export interface IntegrationDeps {
   emit: (event: RunEvent) => Promise<void>;
   /** recordPush notes a published SHA so a later self-push event is dropped (C9). */
   recordPush?: (sha: string) => Promise<void>;
+  /** record appends a signed provenance entry to the ledger (Phase 4b). Optional:
+   *  if the signing key is unset the ledger is simply not written. */
+  record?: (kind: string, payload: Record<string, string>) => Promise<void>;
   now: () => string;
 }
 
@@ -68,6 +71,14 @@ export async function runIntegration(deps: IntegrationDeps, job: IntegrationJob)
   // --- io zone: assemble the prepared bundle (holds tokens) ---
   const snap = await deps.io.snapshot({ base: job.base, agents: job.agents });
   await deps.emit({ type: "log", line: `prepared bundle ready (baseline ${short(snap.baselineSha)})` });
+  await deps.record?.("snapshot", {
+    baselineSha: snap.baselineSha,
+    agents: String(job.agents.length),
+    branches: Object.entries(snap.branches)
+      .map(([a, s]) => `${a}=${s}`)
+      .sort()
+      .join(","),
+  });
 
   // --- compute zone: merge + run tests (NO token, NO egress) ---
   await deps.emit({ type: "merge:start", scope: "all" });
@@ -83,6 +94,13 @@ export async function runIntegration(deps: IntegrationDeps, job: IntegrationJob)
     scope: "final",
     passed: merged.green,
     summary: verdictSummary(merged.verdict, merged.summary),
+  });
+  await deps.record?.("verify", {
+    verdict: merged.verdict,
+    green: String(merged.green),
+    baseSha: merged.baseSha,
+    mergedSha: merged.mergedSha,
+    ...Object.fromEntries(Object.entries(merged.summary).map(([k, v]) => [k, String(v)])),
   });
 
   if (!merged.green) {
@@ -101,6 +119,7 @@ export async function runIntegration(deps: IntegrationDeps, job: IntegrationJob)
       ref: merged.ref,
     });
     if (deps.recordPush) await deps.recordPush(pub.pushedSha);
+    await deps.record?.("publish", { pushedSha: pub.pushedSha, baseSha: merged.baseSha });
     await deps.emit({ type: "run:done", green: true, finalTest: "published", mergedSha: pub.pushedSha, summary: merged.summary });
     return { status: "succeeded", verdict: merged.verdict, mergedSha: merged.mergedSha, pushedSha: pub.pushedSha };
   } catch (e) {

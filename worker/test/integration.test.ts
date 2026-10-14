@@ -53,14 +53,16 @@ class FakeCompute implements ComputeZoneClient {
 function mkDeps(io: FakeIO, compute: FakeCompute) {
   const events: RunEvent[] = [];
   const pushed: string[] = [];
+  const ledger: { kind: string; payload: Record<string, string> }[] = [];
   const deps: IntegrationDeps = {
     io,
     compute,
     emit: async (e) => { events.push(e); },
     recordPush: async (sha) => { pushed.push(sha); },
+    record: async (kind, payload) => { ledger.push({ kind, payload }); },
     now: () => "2026-10-14T00:00:00Z",
   };
-  return { deps, events, pushed };
+  return { deps, events, pushed, ledger };
 }
 
 describe("runIntegration", () => {
@@ -74,6 +76,23 @@ describe("runIntegration", () => {
     expect(io.publishes).toHaveLength(1);
     expect(pushed).toEqual(["merged-sha"]);
     expect(events.some((e) => e.type === "run:done" && e.green === true)).toBe(true);
+  });
+
+  it("writes a provenance ledger record per step (snapshot, verify, publish)", async () => {
+    const io = new FakeIO(), compute = new FakeCompute();
+    const { deps, ledger } = mkDeps(io, compute);
+    await runIntegration(deps, job);
+    expect(ledger.map((r) => r.kind)).toEqual(["snapshot", "verify", "publish"]);
+    expect(ledger[1].payload.verdict).toBe("green");
+    expect(ledger[2].payload.pushedSha).toBe("merged-sha");
+  });
+
+  it("records snapshot + verify but NOT publish on a red verdict", async () => {
+    const io = new FakeIO(), compute = new FakeCompute();
+    compute.resp = { ...compute.resp, green: false, verdict: "red", mergedBundle: undefined };
+    const { deps, ledger } = mkDeps(io, compute);
+    await runIntegration(deps, job);
+    expect(ledger.map((r) => r.kind)).toEqual(["snapshot", "verify"]);
   });
 
   it("hands the compute zone NO token (token isolation, C13/C15)", async () => {

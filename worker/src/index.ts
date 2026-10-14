@@ -14,6 +14,7 @@ import { ArtifactsForker, DOIdempotencyStore, DORunsStore } from "./v1/stores";
 import { newSecret as newRunSecret, verify as verifyHmac, SIGNATURE_HEADER } from "./v1/hmac";
 import type { Run } from "./v1/lifecycle";
 import type { IntegrationJob } from "./v1/integration";
+import { R2LedgerStore, type R2Like } from "./v1/ledger";
 
 // Phase 3c classes the runtime instantiates (Containers + the durable consumer).
 export { ComputeZone, IOZone } from "./containers";
@@ -31,6 +32,9 @@ interface Env {
   IO_ZONE: DurableObjectNamespace;
   BASE_COORDINATOR: DurableObjectNamespace;
   INTEGRATION_WORKFLOW: Workflow;
+  // Phase 4b: R2 bucket holding the signed provenance ledger (read side).
+  LEDGER?: R2Bucket;
+  LEDGER_SIGNING_SEED?: string;
   // CONTROL_TOKENS is a JSON map of bearer token -> { id, roles[] } for the /v1
   // control plane (a Worker secret in prod). Absent -> /v1 has no valid tokens,
   // so every /v1 request is 401 (fail closed), never open.
@@ -140,6 +144,7 @@ export default {
         };
         await env.INTEGRATION_WORKFLOW.create({ id: run.id, params: job });
       },
+      ledger: env.LEDGER ? new R2LedgerStore(env.LEDGER as unknown as R2Like) : undefined,
       now: () => new Date().toISOString(),
       newId: () => `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
       newSecret: newRunSecret,

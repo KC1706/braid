@@ -67,6 +67,8 @@ export interface Deps {
   /** Enqueue the run for the Workflow consumer (Phase 3c). Gets the provisioned
    *  repos/tokens and the run's per-run HMAC secret (for signed event ingress). */
   enqueue: (run: Run, prov: Provision, secret: string) => Promise<void>;
+  /** Optional reader for a run's signed provenance ledger (Phase 4b). */
+  ledger?: { list(runId: string): Promise<unknown[]> };
   now: () => string;
   newId: () => string;
   newSecret: () => string;
@@ -97,11 +99,12 @@ export async function handleV1(req: Request, deps: Deps): Promise<Response | nul
     return createRunHandler(req, deps);
   }
 
-  const m = url.pathname.match(/^\/v1\/runs\/([A-Za-z0-9_-]+)(?:\/(cancel|approve|reject))?$/);
+  const m = url.pathname.match(/^\/v1\/runs\/([A-Za-z0-9_-]+)(?:\/(cancel|approve|reject|ledger))?$/);
   if (m) {
     const id = m[1];
     const verb = m[2];
     if (!verb && req.method === "GET") return getRunHandler(req, deps, id);
+    if (verb === "ledger" && req.method === "GET") return ledgerHandler(req, deps, id);
     if (verb === "cancel" && req.method === "POST") return actionHandler(req, deps, id, "cancel", "runs:cancel");
     if (verb === "approve" && req.method === "POST") return actionHandler(req, deps, id, "approve", "runs:approve");
     if (verb === "reject" && req.method === "POST") return actionHandler(req, deps, id, "reject", "runs:approve");
@@ -187,6 +190,19 @@ async function actionHandler(
   if (!res.ok) return json({ error: res.error }, 409);
   await deps.runs.update(res.run);
   return json(publicRun(res.run));
+}
+
+/**
+ * ledgerHandler returns a run's signed provenance chain (Phase 4b). Read-only
+ * (runs:read). The records carry their own hashes + signatures, so a client can
+ * verify the chain offline with `braid ledger verify` and the public key.
+ */
+async function ledgerHandler(req: Request, deps: Deps, id: string): Promise<Response> {
+  const auth = await authorize(req, deps.tokens, "runs:read");
+  if (!auth.ok) return json({ error: auth.error }, auth.status);
+  if (!deps.ledger) return json({ error: "ledger not configured" }, 501);
+  const records = await deps.ledger.list(id);
+  return json(records);
 }
 
 /** publicRun is the run view returned to clients (no secret). */
