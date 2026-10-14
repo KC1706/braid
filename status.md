@@ -3,7 +3,43 @@
 > Cross-session memory. Update this at the end of every work session: what changed, what's next,
 > what's blocked. Newest entry on top. See `plan.md` for the full plan.
 
-**Deadline:** 2026-10-14 · **Today:** 2026-10-14 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1–3 COMPLETE & DEPLOYED LIVE** + **Phase 4a/4b DONE & LIVE** on `braid-worker.kunalchandoa925.workers.dev` (account `06bff0b6…`). Base-Coordinator (per-base lease + parent-SHA CAS) live + **concurrency gate PASSED** (two concurrent same-base runs: one published, the other CAS-rejected, base intact, no duplicate). Signed ledger in R2 live + **tamper-evidence gate PASSED cross-language** (Worker writes a signed chain, `braid ledger verify` validates it with only the public key; mutation + hash-reforge both detected). **Auto-rebase DONE & live-proven** (`rebase:2` fired live). **4c DONE & live-proven** — seq-numbered append-only event log + snapshots + R2 blob offload; `GET /rebuild` reconstructs a byte-identical projection from the log (`REBUILD == LIVE STATE: True`). **Phase 4 COMPLETE.** Next = Phase 5 (operator console — the plan says build it last). (hackathon submission on hold — user pivot)
+**Deadline:** 2026-10-14 · **Today:** 2026-10-14 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1–4 COMPLETE & DEPLOYED LIVE** + **Phase 5a (operator console) & 5c (economics) DONE & LIVE** on `braid-worker.kunalchandoa925.workers.dev` (account `06bff0b6…`). Operator console at **`/console`** (served by the ASSETS binding) drives runs entirely through the authenticated `/v1` API + the signed ledger. **Economics gate PASSED** ($/run published + positive: a real run cost **$0.0014** vs. a published **$0.10** price → **+$0.0986 margin, 99%**). Latest worker version `3368d1e0`. Still open: **5b** (DR mirror / auto-rollback / restore drill) and **Phase 6** (scale hardening — warm pool, back-pressure, load test). (hackathon submission on hold — user pivot)
+
+## ✅ 2026-10-14 — Phase 5a + 5c: operator console + per-run economics (DONE & LIVE-PROVEN)
+- **5a Operator console — DEPLOYED & PROVEN LIVE.** `dashboard/public/console.html` (self-contained, served by
+  the worker ASSETS binding at **`/console`**). Connects with a bearer token (per-viewer localStorage;
+  fail-closed when unset). Three tabs over the authenticated `/v1` API:
+  - **Live** — run list (`GET /v1/runs`, newest-first), new-run form (`POST /v1/runs`), lifecycle + agents +
+    conflicts + the seq-numbered event log polled via `GET /v1/runs/:id/live`; cancel/approve/reject actions
+    (RBAC-aware: a viewer token gets 403 with a "needs higher role" hint).
+  - **Audit & lineage** — rebuild proof (`/live` vs `/rebuild`, shown byte-identical), the signed R2 ledger
+    chain (`GET /v1/runs/:id/ledger`) with an offline-verify hint, and the lifecycle history.
+  - **Economics** — `GET /v1/runs/:id/cost`: itemized $/run + margin vs. the published price.
+- **Backend (Phase 5a/5c):**
+  - **Run index** — the Orchestrator DO upserts a compact run summary into a well-known `__control__` instance
+    on EVERY run write (`/init` + `/record` PUT), so BOTH control-plane writes AND the Workflow's direct record
+    writes keep the console list current. `GET /v1/runs` reads it (newest-first, bounded 500). `DORunsStore.list()`.
+  - **Authenticated projection reads** — `GET /v1/runs/:id/{live,events,rebuild}` proxy the run's Orchestrator DO
+    behind `runs:read`, so the console never touches the legacy unauthenticated `/runs/:id` surface. (501 if the
+    projection dep is absent; 404 for an unknown run.)
+  - **5c `cost.ts`** — PURE `estimateCost(facts, price, priceSheet)` over a documented Cloudflare price sheet
+    (container vCPU-s / GiB-s, Workers AI call, Workers request, R2 class-A op, R2 storage GiB) + `factsFromRun`
+    (conservative facts from wall-time, swarm size, conflict count). `GET /v1/runs/:id/cost` publishes an itemized
+    cost + margin; published price **$0.10/run** (`runPriceUsd` dep). **12 new tests** (7 cost, 5 router list/cost/
+    projection). Worker suite **75 tests green, tsc strict clean**; Go `build`+`vet` clean, 17 pkgs ok.
+- **LIVE GATE (end-to-end, through the console's exact endpoints):** seeded a fresh base `p5-98379`
+  (baseline `8a8fcd24`), `POST /v1/runs` (2 agents) → appears in `GET /v1/runs` as `queued` → Workflow drove it
+  `running`→`succeeded`, published merge `19a3ad09`. Verified live: `/live` full 6-event log + green result;
+  **`/rebuild` == `/live` byte-identical**; **`/cost` = $0.001418 vs $0.10 → +$0.098582 margin (99%, POSITIVE)**;
+  `/ledger` 3-record chain → `braid ledger verify` with only the **public key `cf2793e3…`** = "chain intact,
+  every signature valid", and a tampered verdict → "content hash mismatch" (rejected). RBAC: viewer reads 200,
+  viewer cancel 403. Deploy note: the container registry push hit the known transient `registry.cloudflare.com`
+  timeout on the first `wrangler deploy`; worker code + assets uploaded, and a retry finished (no container
+  changes). Console serves at `/console` (ASSETS drops the `.html`; `/console.html` 307→`/console`).
+- **Still open (non-gating for 5a/5c):** 5b resilience (DR mirror of the Artifacts base, compaction,
+  auto-rollback on a post-merge regression, trust tiers) and Phase 6 scale (warm container pool to kill the
+  per-run cold start, back-pressure, per-tenant fairness, load test). Prior runs created before the index
+  existed won't appear in `GET /v1/runs` (index is forward-looking).
 
 ## ✅ 2026-10-14 — Phase 4a + 4b: Base-Coordinator (live concurrency gate PASSED) + signed ledger
 - **4a Base-Coordinator (C8) — DEPLOYED & PROVEN LIVE.** One coordinator per base serializes publishes in
