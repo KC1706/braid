@@ -31,11 +31,31 @@
   tamper-evident ✅ (unit), no self-trigger ✅ (`isSelfPush` + guard store; external Artifacts→Worker webhook
   still unwired so nothing can loop yet). Commits `297442c` (ledger), `b0677a3` (coordinator), this doc.
 - **Known Phase-4 follow-ups:** (1) the base_moved loser is NOT auto-rebased/retried yet — it stays `running`
-  until cancelled (the CAS prevents the clobber, which is the safety-critical half; auto-rebase is next). (2) the
-  ledger primitive is not yet written to during a live run — needs an R2 object-locked `Store` + per-step
-  `Append` in the Workflow. (3) 4c (seq-numbered Orchestrator events + blobs→R2, rebuildable) not started; the DO
-  already persists reduced state. (4) each run gets its own compute/io container instance (`*-${runId}`) → per-run
-  isolation (good for security) at the cost of a cold start per run.
+  until cancelled (the CAS prevents the clobber, which is the safety-critical half; auto-rebase is next).
+  (2) 4c (seq-numbered Orchestrator events + blobs→R2, rebuildable) not started; the DO already persists reduced
+  state. (3) each run gets its own compute/io container instance (`*-${runId}`) → per-run isolation (good for
+  security) at the cost of a cold start per run.
+
+## ✅ 2026-10-14 — Phase 4b ledger WIRED into runs (code-complete; deploy blocked on R2 activation)
+- The signed ledger now records a per-step entry during a run, **byte-compatible with the Go verifier** so an
+  auditor validates the chain offline with only the public key.
+  - `braid ledger` CLI: `keygen` (Ed25519 seed + pub) and `verify -pubkey <hex> [-file]` (verify a records JSON
+    chain, non-zero + named record on tamper). `internal/ledger.CanonicalHash` exported; `vector_test.go` emits
+    the shared Go/TS interop vector.
+  - `worker/src/v1/ledger.ts` — TS writer matching Go byte-for-byte: `contentHash` (length-prefixed SHA-256,
+    UTF-8 byte lengths), canonical payload-key order, `canonicalHash`, Ed25519 via WebCrypto (raw seed wrapped
+    as PKCS8), `R2LedgerStore` (one immutable object per record). **Interop LOCKED in `ledger.test.ts`:** the
+    canonical hash equals the Go vector AND the deterministic Ed25519 signature equals Go's.
+  - `runIntegration` gains a `record(kind,payload)` hook → snapshot / verify / publish entries (red verdict
+    records snapshot+verify, not publish). `workflow.ts` builds the writer from the `LEDGER` R2 bucket +
+    `LEDGER_SIGNING_SEED` (both optional — ledger is additive, no-op when unset) and appends each as a durable
+    step. `GET /v1/runs/:id/ledger` (runs:read) returns the chain. 56 vitest green, tsc clean. Commits
+    `a60073f` (CLI), `ed92b5b` (wiring).
+- **BLOCKED on account setup (user actions):** R2 is not enabled on the account (`wrangler r2 bucket create` →
+  "Please enable R2 through the Cloudflare Dashboard" [10042]). Once R2 is enabled: create bucket `braid-ledger`,
+  set the `LEDGER_SIGNING_SEED` secret (seed stashed in this session's scratchpad; **public key
+  `cf2793e38b8cf7b542b93f671ba8abbb76a1a37d33ad5dc081e9c2ec8c46d4dc`**), deploy, then the live gate = real run →
+  chain in R2 → `GET /v1/runs/:id/ledger` → `braid ledger verify` PASS → mutate a record → verify FAIL.
 
 ## ✅ 2026-10-14 — Phase 3c COMPLETE & DEPLOYED: two-zone Containers + durable Workflow; deploy gate PASSED
 - **Architecture (two Cloudflare Containers, one braid image, zone by `BRAID_ZONE`):**
