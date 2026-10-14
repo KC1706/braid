@@ -3,7 +3,35 @@
 > Cross-session memory. Update this at the end of every work session: what changed, what's next,
 > what's blocked. Newest entry on top. See `plan.md` for the full plan.
 
-**Deadline:** 2026-10-14 · **Today:** 2026-10-14 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1 COMPLETE** + **Phase 2 COMPLETE (2a–2e)** + **Phase 3a done** (`internal/gitio` + `cmd/braid run`) + **Phase 3b code-complete** (`/v1` control plane in `worker/`, unit-tested, NOT yet deploy-tested); next = Phase 3c Queues/Workflow + the Phase-3 deploy gate (needs wrangler + real Artifacts creds) (hackathon submission on hold — user pivot)
+**Deadline:** 2026-10-14 · **Today:** 2026-10-14 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1 COMPLETE** + **Phase 2 COMPLETE (2a–2e)** + **Phase 3a done** (`internal/gitio` + `cmd/braid run`) + **Phase 3b DEPLOYED LIVE** (`/v1` control plane on `braid-worker.kunalchandoa925.workers.dev`; Artifacts fork+token provisioning validated against the real `braid` namespace; `/v1` authed flow blocked only on setting the `CONTROL_TOKENS` secret — see below); next = finish `/v1` live check + Phase 3c Queues/Workflow + the red-team half of the deploy gate (hackathon submission on hold — user pivot)
+
+## ✅ 2026-10-14 — Phase 3b DEPLOYED to real Cloudflare + Artifacts provisioning validated live
+- **Deployed** `braid-worker` → `https://braid-worker.kunalchandoa925.workers.dev` (account `06bff0b6…`,
+  version `3472c648`). Bindings resolve live: `ORCHESTRATOR` (DO), `ARTIFACTS` (namespace `braid`), `AI`, `ASSETS`.
+- **Added a real typecheck gate:** there was no `worker/tsconfig.json`, so `tsc --strict` had never actually
+  run (vitest transpiles via esbuild, no type check). Added a strict tsconfig + fixed the 3 strict nits it
+  found in the test files. `src/` was already clean. 33 vitest tests still green. Commit `f95b12b`.
+- **Validated live against the real `braid` Artifacts namespace** (via the legacy `/api/base` + `/api/fork`
+  endpoints, which call the exact `env.ARTIFACTS.create / get().fork() / get().createToken("write",3600)`
+  sequence `ArtifactsForker.fork` uses in the `/v1` path):
+  - `/api/base` → created a real repo, remote `…artifacts.cloudflare.net/git/braid/<name>.git`, default
+    branch `main`, minted a scoped `art_v2_x_…` write token (68 chars, 1h expiry) — the format `gitio.Token` parses.
+  - `/api/fork` → forked that base 3× (one distinct repo per agent), each with its own valid `art_v2_` write
+    token + expiry. This is the DO/Artifacts glue that was previously only `tsc`-checked — now real-infra-proven.
+  - **Fail-closed auth confirmed live:** `POST /v1/runs` with a bogus bearer → `401` (no `CONTROL_TOKENS` set
+    ⇒ empty token store ⇒ every `/v1` request 401, never open).
+- **BLOCKED (needs user):** two steps hit the Claude Code auto-mode safety classifier and could not be done
+  by the agent — (1) `wrangler secret put CONTROL_TOKENS` (secret-store write), (2) printing token material.
+  To finish the `/v1` authed smoke test (create run → DO-backed fork/record + per-run HMAC secret → get/cancel),
+  the user must set `CONTROL_TOKENS` (a prepared JSON map lives in this session's scratchpad), e.g.
+  `cd worker && npx wrangler secret put CONTROL_TOKENS < <scratchpad>/control_tokens.json`, or add a Bash
+  permission rule for `wrangler secret put`. Then re-deploy is NOT needed (secret is picked up live).
+- **Deploy gate — second half still open:** the red-team (agent-code injection can't exfiltrate a token /
+  reach network / mutate tests) needs the **compute zone that runs untrusted `go test`** — not expressible on
+  plain Workers; needs **Containers** (the token has `containers`/`cloudchamber` write) and is part of Phase 3c.
+- **NEXT:** finish `/v1` live check once the secret is set; then **Phase 3c** — Queue producer replacing the
+  `enqueue` no-op + a Workflow/Container consumer that clones each fork, runs `RunService.Run` sandboxed, and
+  publishes via `gitio` (3a) with the CAS; self-push event filter + dedup (C9). Then the red-team gate.
 
 ## ✅ 2026-10-14 — Phase 3b code-complete: `/v1` control plane in `worker/` (authz · idempotency · lifecycle · per-run HMAC)
 - New **`worker/src/v1/`** — pure, offline-testable backbone (33 vitest tests green; `tsc --strict` clean):
