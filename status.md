@@ -3,7 +3,37 @@
 > Cross-session memory. Update this at the end of every work session: what changed, what's next,
 > what's blocked. Newest entry on top. See `plan.md` for the full plan.
 
-**Deadline:** 2026-10-14 · **Today:** 2026-10-13 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1 COMPLETE** + **Phase 2a + 2d done** (rung-1 resolution guards + determinism); next = Phase 2e parallel tree merge (hackathon submission on hold — user pivot)
+**Deadline:** 2026-10-14 · **Today:** 2026-10-14 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1 COMPLETE** + **Phase 2a + 2d + 2e done** (resolution guards + determinism + parallel tree merge); next = Phase 2b/2c rungs 0 & 5, then the Phase 2 exit gate (hackathon submission on hold — user pivot)
+
+## ✅ 2026-10-14 — Phase 2e done: parallel tree merge (`internal/treemerge` + `merge.IntegrateTree`)
+- New **`internal/treemerge`** (pure, no git/I/O) — plans the fold SHAPE: `Plan(n)` builds a balanced
+  pairwise reduction tree over n canonically-ordered leaves (pair adjacent nodes level by level, carry an
+  odd node up), depth **ceil(log2 n)** vs the linear fold's O(n). `Node` + `IsLeaf/Depth/Leaves`. Leaf
+  order preserved (determinism). For n=3 the tree is `merge(merge(0,1),2)` — same associativity as linear.
+- New **`merge.IntegrateTree`** (sibling entry point; the proven linear `Integrate` is untouched) — folds
+  the agents through the plan: each internal node independently merges two sibling subtrees on a fresh
+  `braid/node-k` branch (both descend from baseline → diff3 gives a clean 3-way base), resolving true
+  conflicts with the resolver + the Phase-2a guards, verified by a **build-level** node ladder
+  (`{Build: o.Ladder.Build}` → structural guards + build only). The **FULL** ladder (incl. the test suite)
+  runs **once at the ROOT** (2e's defining property). Agents are canonically ordered first, so with a
+  caching resolver the whole tree merge is reproducible. Unresolvable node → `git merge --abort` + coarse
+  escalate (per-agent policy attribution over a tree is a later refinement).
+  - Refactor: `resolveFileWithRetries` now takes the ladder to verify against (`resolveArgs.lad`, nil →
+    `o.Ladder`); the linear caller passes nil (unchanged behavior), the tree passes the node ladder.
+- Tests: `internal/treemerge` (depth=ceil(log2 n) for n=1..17; every agent covered once; ascending leaf
+  order; n=3 linear-shape) + `internal/merge/integrate_tree_test.go`: 3-agent fixture composes green (1
+  union conflict); **tree fold ≡ linear fold** (byte-identical source-tree fingerprint for n=3); 4-agent
+  balanced depth-2 tree (conflict surfaces at the root) is green AND reproducible across a repeat run and a
+  permuted input order. **Full suite + vet green; `demo` verdict identical (3 merged · 1 conflict · 0 LLM).**
+- **NOTE:** `IntegrateTree` is built and tested but not yet wired into `run.Service` (the linear path is
+  still the default production entry). Wiring it behind a `RunSpec` flag + attributing per-agent
+  incompatibility over the tree is a follow-up.
+- **NEXT = Phase 2b/2c (rungs 0 & 5), ship minimal first:** rung 0 = each subtask carries a
+  machine-readable acceptance spec, frozen + content-hashed before code (`internal/contract`); rung 5 =
+  metamorphic — golden snapshots of each agent's observable behavior on its own fork, assert the merged
+  system still satisfies EVERY agent's contract. Then meet the **Phase 2 exit gate** (conflict corpus incl.
+  a semantic no-textual-conflict case; region-confinement + AST-bounds rejection [done 2a]; reproducibility
+  [done 2d/2e]). See `GO_PRODUCTION_PLAN.md` §3 Phase 2 + §4.
 
 ## ✅ 2026-10-13 — Phase 2d done: determinism (`internal/determinism` + resolver + merge)
 - New **`internal/determinism`** package — the reproducibility primitives:

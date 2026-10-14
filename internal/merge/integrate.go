@@ -446,6 +446,7 @@ func canonicalAgentOrder(repoDir, baseline string, agents []AgentInput) []AgentI
 // resolveArgs bundles the inputs to resolveFileWithRetries.
 type resolveArgs struct {
 	o          Options
+	lad        *ladder.Ladder // ladder to verify each resolution against (nil → o.Ladder)
 	file       string
 	oursIntent string
 	agent      AgentInput
@@ -466,6 +467,10 @@ func resolveFileWithRetries(ctx context.Context, a resolveArgs) (resolved bool, 
 	}
 	conflictedContent := string(raw)
 	hunks := ParseConflicts(conflictedContent)
+	lad := a.lad
+	if lad == nil {
+		lad = a.o.Ladder
+	}
 
 	for attempt := 0; attempt <= a.o.MaxRetries; attempt++ {
 		outputs := make([]resolver.ResolveOutput, 0, len(hunks))
@@ -507,7 +512,7 @@ func resolveFileWithRetries(ctx context.Context, a resolveArgs) (resolved bool, 
 			return false, "", err
 		}
 
-		v, err := a.o.Ladder.Run(ctx, a.o.RepoDir, a.o.Baseline)
+		v, err := lad.Run(ctx, a.o.RepoDir, a.o.Baseline)
 		if err != nil {
 			return false, "", err
 		}
