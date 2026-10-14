@@ -246,7 +246,7 @@
 
 ## HOW TO RESUME (run these)
 
-### ▶ GO PRODUCTION (current focus — read the top entry, then start Phase 2a)
+### ▶ GO PRODUCTION (current focus — read the top entry, then start Phase 2b/2c rungs 0 & 5)
 - Sanity (all green): `go build ./... && go vet ./... && go test ./...`
 - Engine demo (local): `go run ./cmd/braid demo`  → verdict green, 3 merged · 1 conflict · 0 LLM
 - Engine demo (sandboxed, no creds + egress-deny): `go run ./cmd/braid demo --sandbox`  (same verdict)
@@ -254,10 +254,20 @@
 - Stream to the deployed DO: set `BRAID_WORKER_URL=https://braid-worker.kunalchandoa925.workers.dev`
   before `demo`/`serve`; it prints a `…/?run=<id>` URL. (Vocabulary gap: Go emits `merge:start`/
   `verify(final)`, not TS `run:init`/`run:done` — old dashboard reducer won't fully drive; Phase 5 aligns.)
-- **NEXT (Phase 2a, rung-1 hardening in `internal/ladder`):** (i) confine resolver edits to the conflict
-  region (reject an out-of-hunk edit + test); (ii) AST bounds on resolver/LLM output (must `go/parser`-parse
-  & stay in bounds + reject-non-parsing test). The delete-test / test-count-regression block is ALREADY
-  live via `Ladder.Run`→`StructuralGuards` — do NOT rebuild it. See `GO_PRODUCTION_PLAN.md` §3 Phase 2 + §4.
+- **DONE so far in Phase 2:** 2a resolution guards (`internal/ladder/resolution_guard.go`), 2d
+  determinism (`internal/determinism` + `resolver.CachingResolver` + temp-0/digest + `Options.CanonicalOrder`),
+  2e parallel tree merge (`internal/treemerge` + `merge.IntegrateTree`). All green, pushed. See the dated
+  entries at the TOP of this file for the full detail on each.
+- **NEXT (Phase 2b/2c — rungs 0 & 5; ship minimal first):** rung 0 = each subtask carries a
+  machine-readable acceptance spec, frozen + content-hashed before code (new `internal/contract`); rung 5
+  = metamorphic — golden snapshots of each agent's observable behavior on its own fork; assert the merged
+  system still satisfies EVERY agent's contract ("both features survived"). Then meet the **Phase 2 exit
+  gate** (conflict corpus incl. a semantic no-textual-conflict case [rung-2 build already catches Go cross-
+  pkg breakage]; region-confinement + AST-bounds rejection = DONE 2a; reproducibility twice across N agents
+  = DONE 2d/2e). See `GO_PRODUCTION_PLAN.md` §3 Phase 2 + §4.
+- **Carry-over follow-ups (not blockers):** wire `merge.IntegrateTree` into `run.Service` behind a
+  `RunSpec` flag + per-agent incompatibility attribution over the tree (2e); real coverage non-regression
+  via Keploy to close the `t.Skip()` gap in `CountTestFuncs` (2a).
 
 ### TS hackathon pipeline (ON HOLD — reference only, not the current focus)
 - **Live dashboard:** https://braid-worker.kunalchandoa925.workers.dev/  (money-shot visual)
