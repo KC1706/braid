@@ -3,7 +3,7 @@
 > Cross-session memory. Update this at the end of every work session: what changed, what's next,
 > what's blocked. Newest entry on top. See `plan.md` for the full plan.
 
-**Deadline:** 2026-10-14 · **Today:** 2026-10-14 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1 COMPLETE** + **Phase 2 COMPLETE (2a–2e)** + **Phase 3a done** (`internal/gitio` + `cmd/braid run`) + **Phase 3b DEPLOYED LIVE** (`/v1` control plane on `braid-worker.kunalchandoa925.workers.dev`; Artifacts fork+token provisioning validated against the real `braid` namespace; `/v1` authed flow blocked only on setting the `CONTROL_TOKENS` secret — see below); next = finish `/v1` live check + Phase 3c Queues/Workflow + the red-team half of the deploy gate (hackathon submission on hold — user pivot)
+**Deadline:** 2026-10-14 · **Today:** 2026-10-14 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1 COMPLETE** + **Phase 2 COMPLETE (2a–2e)** + **Phase 3a done** (`internal/gitio` + `cmd/braid run`) + **Phase 3b DEPLOYED + VALIDATED LIVE** (`/v1` control plane on `braid-worker.kunalchandoa925.workers.dev`; Artifacts fork+token provisioning, full `/v1` authed lifecycle, idempotency, and the C10 HMAC event gate all proven end-to-end on real Cloudflare infra — see below); next = Phase 3c Queues/Workflow + the red-team half of the deploy gate (untrusted-code compute zone via Containers) (hackathon submission on hold — user pivot)
 
 ## ✅ 2026-10-14 — Phase 3b DEPLOYED to real Cloudflare + Artifacts provisioning validated live
 - **Deployed** `braid-worker` → `https://braid-worker.kunalchandoa925.workers.dev` (account `06bff0b6…`,
@@ -20,12 +20,20 @@
     token + expiry. This is the DO/Artifacts glue that was previously only `tsc`-checked — now real-infra-proven.
   - **Fail-closed auth confirmed live:** `POST /v1/runs` with a bogus bearer → `401` (no `CONTROL_TOKENS` set
     ⇒ empty token store ⇒ every `/v1` request 401, never open).
-- **BLOCKED (needs user):** two steps hit the Claude Code auto-mode safety classifier and could not be done
-  by the agent — (1) `wrangler secret put CONTROL_TOKENS` (secret-store write), (2) printing token material.
-  To finish the `/v1` authed smoke test (create run → DO-backed fork/record + per-run HMAC secret → get/cancel),
-  the user must set `CONTROL_TOKENS` (a prepared JSON map lives in this session's scratchpad), e.g.
-  `cd worker && npx wrangler secret put CONTROL_TOKENS < <scratchpad>/control_tokens.json`, or add a Bash
-  permission rule for `wrangler secret put`. Then re-deploy is NOT needed (secret is picked up live).
+- **`/v1` AUTHED FLOW VALIDATED LIVE** (user set `CONTROL_TOKENS` via `wrangler secret put`; a 3-principal
+  admin/operator/viewer map). End-to-end against the deployed worker + real Orchestrator DO + real Artifacts:
+  - `POST /v1/runs` (operator) → **201**, forked the real base 2× in Artifacts, minted a per-run HMAC
+    `eventSecret`, persisted run+secret into the run's own Orchestrator DO (`DORunsStore.create → /init`).
+  - `GET /v1/runs/:id` (viewer) → **200**, `eventSecret` NOT leaked, audit `history` present (DO `/record`).
+  - RBAC: viewer `POST /v1/runs` → **403**; `cancel` (operator) → **200 canceled** (history grew, DO `/record` PUT);
+    second `cancel` → **409** (terminal); unknown id → **404**.
+  - **Idempotency** (real `__control__` DO): same `Idempotency-Key`+body replays the **same run id** (no
+    double-fork); same key + different body → **409**.
+  - **C10 per-run HMAC event gate** (the security-critical one): `POST /runs/:id/event` with **no** sig → 401,
+    **wrong** sig → 401, **correct** lowercase-hex HMAC-SHA256 → **200**, and the signed event reduced +
+    persisted into DO state (verified via `/state`). Cross-run/unauthenticated event injection is blocked live.
+- Two steps needed the user (Claude Code safety classifier blocks the agent): `wrangler secret put`
+  (secret-store write) and printing token material. Both handled; tokens live only in this session's scratchpad.
 - **Deploy gate — second half still open:** the red-team (agent-code injection can't exfiltrate a token /
   reach network / mutate tests) needs the **compute zone that runs untrusted `go test`** — not expressible on
   plain Workers; needs **Containers** (the token has `containers`/`cloudchamber` write) and is part of Phase 3c.
