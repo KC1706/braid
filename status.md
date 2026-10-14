@@ -3,7 +3,38 @@
 > Cross-session memory. Update this at the end of every work session: what changed, what's next,
 > what's blocked. Newest entry on top. See `plan.md` for the full plan.
 
-**Deadline:** 2026-10-14 · **Today:** 2026-10-14 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1 COMPLETE** + **Phase 2a + 2b + 2c + 2d + 2e done** (resolution guards + contract-first + metamorphic + determinism + parallel tree merge); next = the Phase 2 exit-gate writeup, then Phase 3 (hackathon submission on hold — user pivot)
+**Deadline:** 2026-10-14 · **Today:** 2026-10-14 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1 COMPLETE** + **Phase 2 COMPLETE (2a–2e)** + **Phase 3a done** (`internal/gitio` trusted zone); next = Phase 3b control-plane Worker (`/v1/runs`, authz, idempotency) + 3c Queues/Workflow (hackathon submission on hold — user pivot)
+
+## ✅ 2026-10-14 — Phase 3a done: `internal/gitio` — the trusted git-I/O zone (scoped-token clone/push + CAS)
+- New **`internal/gitio`** — the SECOND security zone (GO_PRODUCTION_PLAN.md §1 two-zone invariant, §3 3a):
+  git-only, **never executes untrusted code**, and the **only place an Artifacts token lives**. The compute
+  zone and the I/O zone hand off through a **content-addressed git bundle** (not a shared working dir).
+  - **`Token`** — scoped, short-lived Artifacts credential. `secret()` strips `?expires=`; `configArgs()`
+    injects it per-invocation as `-c http.extraHeader=Authorization: Bearer …` (never in the remote URL,
+    never in the env); `BasicAuthURL()` is the in-URL alternative; `Expired(now)` (zero = never);
+    `String()`/`redactArgs()` never print the secret.
+  - **`WriteBundle(ctx, computeRepo, baseRef, mergedRef, dst)`** (compute zone) → `Bundle{Path, MergedSHA,
+    BaseSHA, Ref}`: self-contained bundle of the merged ref's full history, recording the base tip as the
+    CAS expectation. The trusted zone never touches the compute repo.
+  - **`Zone{Remote, Token}.CloneBase` / `.PushBundle`** (I/O zone): clone the base into a fresh trusted
+    workdir, import the bundle, verify the merged commit **descends from** the recorded base (never graft
+    unrelated history), then `git push --force-with-lease=<branch>:<BaseSHA>` = **atomic compare-and-swap**.
+    Base moved before OR after the clone → **`ErrBaseMoved`**; non-descendant bundle rejected, remote
+    untouched. git runs with a **scrubbed env** (PATH/HOME + `GIT_TERMINAL_PROMPT=0`, `GIT_CONFIG_NOSYSTEM=1`).
+  - **NOTE:** the parent-SHA CAS lives here as `--force-with-lease`; Phase 4a's Base-Coordinator DO will
+    wrap it with a lease/queue so a moved base triggers an automatic rebase-retry rather than a hard error.
+- Tests (8): over **local bare-repo remotes** (no network/token) — publish round-trip (remote `main` → merged
+  SHA), both CAS-rejection paths (base moved pre- and post-clone), non-descendant guard (remote untouched),
+  plus token unit tests (secret strip / expiry / BasicAuthURL / configArgs+redaction). **Full suite + vet green.**
+- **NOT yet wired** into an end-to-end flow — `run.Service` still operates on a local RepoDir with branches
+  already present. The real Phase-3 flow (clone base → fork agents → sandboxed compute merge → bundle →
+  gitio push) is orchestrated by the **control-plane Worker + Workflow (3b/3c)**, the next chunk.
+- **NEXT = Phase 3b** (control plane; TS `worker/`): `POST /v1/runs` (fork N, enqueue), `GET /v1/runs/:id`,
+  cancel/approve; authN/Z + RBAC + capability tokens; **idempotency key**; per-run HMAC on `/runs/:id/event`;
+  JIT-minted scoped tokens. Then **3c** Queues + durable Workflow driving `RunService.Run` + self-trigger
+  dedup. NOTE: 3b/3c is TS + real Cloudflare infra (wrangler/DO/Queues) and needs real Artifacts creds to
+  prove the gate — a different kind of work than the Go core; confirm scope before deploying. See
+  `GO_PRODUCTION_PLAN.md` §3 Phase 3.
 
 ## ✅ 2026-10-14 — Phase 2b/2c done: rung-0 contract-first + rung-5 metamorphic (`internal/contract`, wired into the engine)
 - New **`internal/contract`** (pure; `determinism` + stdlib only, no git/I/O — the engine owns checkouts):
@@ -278,7 +309,7 @@
 
 ## HOW TO RESUME (run these)
 
-### ▶ GO PRODUCTION (current focus — read the top entry, then do the Phase 2 exit-gate writeup → Phase 3)
+### ▶ GO PRODUCTION (current focus — read the top entry; Phase 2 + 3a done, next = Phase 3b/3c control plane)
 - Sanity (all green): `go build ./... && go vet ./... && go test ./...`
 - Engine demo (local): `go run ./cmd/braid demo`  → verdict green, 3 merged · 1 conflict · 0 LLM
 - Engine demo (sandboxed, no creds + egress-deny): `go run ./cmd/braid demo --sandbox`  (same verdict)
@@ -291,11 +322,13 @@
   + `Trail.Metamorphic`); 2d determinism (`internal/determinism` + `resolver.CachingResolver` +
   temp-0/digest + `Options.CanonicalOrder`); 2e parallel tree merge (`internal/treemerge` +
   `merge.IntegrateTree`). All green, pushed. Full detail in the dated entries at the TOP of this file.
-- **NEXT = Phase 2 exit-gate writeup, then Phase 3.** The gate is met in-tree (see the 2b/2c top entry):
-  semantic no-textual-conflict case (rung-2 build + rung-5 metamorphic), region-confinement + AST bounds
-  (2a), reproducibility twice across N agents (2d/2e). Remaining work is the writeup/corpus consolidation
-  then **Phase 3** (control plane + git-I/O trusted zone — `internal/gitio`, `worker/`, Queues/Workflow).
-  See `GO_PRODUCTION_PLAN.md` §3 Phase 3.
+- **Phase 3a DONE:** `internal/gitio` trusted zone (scoped-token clone/push + content-addressed bundle +
+  parent-SHA CAS via `--force-with-lease`). See the top entry.
+- **NEXT = Phase 3b/3c** (control plane; TS `worker/` + Queues/Workflow). The Phase-2 exit gate is met
+  in-tree already (semantic case via rung-2 build + rung-5 metamorphic; region-confinement + AST bounds =
+  2a; reproducibility twice across N agents = 2d/2e). 3b/3c is TS + real Cloudflare infra and needs real
+  Artifacts creds to prove the Phase-3 gate — confirm scope before deploying. See `GO_PRODUCTION_PLAN.md`
+  §3 Phase 3.
 - **Carry-over follow-ups (not blockers):** wire `merge.IntegrateTree` into `run.Service` behind a
   `RunSpec` flag + per-agent incompatibility attribution over the tree (2e); surface `Options.Contracts`
   through `run.RunSpec` so the metamorphic rung is reachable from the service/CLI (2c); real coverage
