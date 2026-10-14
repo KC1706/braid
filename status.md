@@ -3,7 +3,28 @@
 > Cross-session memory. Update this at the end of every work session: what changed, what's next,
 > what's blocked. Newest entry on top. See `plan.md` for the full plan.
 
-**Deadline:** 2026-10-14 · **Today:** 2026-10-14 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1 COMPLETE** + **Phase 2 COMPLETE (2a–2e)** + **Phase 3a done** (`internal/gitio` trusted zone); next = Phase 3b control-plane Worker (`/v1/runs`, authz, idempotency) + 3c Queues/Workflow (hackathon submission on hold — user pivot)
+**Deadline:** 2026-10-14 · **Today:** 2026-10-14 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1 COMPLETE** + **Phase 2 COMPLETE (2a–2e)** + **Phase 3a done + two-zone flow wired end-to-end** (`internal/gitio` + `cmd/braid run`); next = Phase 3b control-plane Worker (`/v1/runs`, authz, idempotency) + 3c Queues/Workflow (hackathon submission on hold — user pivot)
+
+## ✅ 2026-10-14 — Phase 3 wiring: `RunSpec` Tree + Contracts; `cmd/braid run` one-shot (first end-to-end two-zone flow)
+- **Carry-overs closed** (2e/2c reachability) + the **first end-to-end two-zone demonstration**:
+  - **`run.RunSpec`** gains `Tree bool` (fold via `merge.IntegrateTree`, O(log N)) and `Contracts
+    []contract.Contract` (Rung-5 metamorphic gate). `Service.Run` selects the integrate fn and passes
+    `Contracts` through. **`IntegrateTree` now runs the same metamorphic block** as the linear path (added
+    to `integrate_tree.go`), so `Tree`+`Contracts` behave consistently. `CanonicalOrder` stays ON.
+  - **`cmd/braid run`** — integrate a prepared repo through `run.Service` (compute zone); if green AND
+    `--remote` set, hand the merged integration branch to **`gitio`** as a content-addressed bundle and
+    publish with the parent-SHA CAS. Token (if any) from `BRAID_ARTIFACTS_TOKEN`, scoped to the I/O zone
+    only. Flags: repeatable `-agent id=branch[:intent]`, `--baseline/--integration-branch/--task/--resolver
+    /--sandbox/--vet/--tree/--max-retries/--remote/--branch`. Not green → does NOT publish.
+- Tests: `internal/run` Tree (demo folds green via the tree) + Contracts pass-through (rung runs,
+  `Trail.Metamorphic` populated, fork-failing check imposes no obligation → stays green). **Verified e2e by
+  hand** against a local bare-repo remote: 2-agent compute merge (union, green) → bundle → `gitio` clone
+  base → **CAS push advances remote `main`** to the merged SHA. **Full suite + vet green; demo unchanged.**
+- **NOTE:** `cmd/braid run` is the local stand-in for what the control-plane Worker drives in prod; it
+  expects a PREPARED repo (baseline + agent branches present) and a remote whose `--branch` tip == the
+  `--baseline` commit (else CAS → `ErrBaseMoved`). Forking agents from a task is still the Worker's job (3b).
+- **NEXT = Phase 3b** (control plane; TS `worker/`): `/v1/runs` lifecycle + authz + idempotency + per-run
+  HMAC + JIT scoped tokens, then 3c Queues/Workflow. TS + real Cloudflare infra; needs real Artifacts creds.
 
 ## ✅ 2026-10-14 — Phase 3a done: `internal/gitio` — the trusted git-I/O zone (scoped-token clone/push + CAS)
 - New **`internal/gitio`** — the SECOND security zone (GO_PRODUCTION_PLAN.md §1 two-zone invariant, §3 3a):
@@ -323,16 +344,21 @@
   temp-0/digest + `Options.CanonicalOrder`); 2e parallel tree merge (`internal/treemerge` +
   `merge.IntegrateTree`). All green, pushed. Full detail in the dated entries at the TOP of this file.
 - **Phase 3a DONE:** `internal/gitio` trusted zone (scoped-token clone/push + content-addressed bundle +
-  parent-SHA CAS via `--force-with-lease`). See the top entry.
+  parent-SHA CAS via `--force-with-lease`). **Wired end-to-end** via `cmd/braid run` (+ `RunSpec.Tree`/
+  `Contracts`). See the top two entries.
+- **End-to-end two-zone run (local, no cloud):** prepare a bare remote + a repo cloned from it with
+  `baseline` + agent branches, then:
+  `go run ./cmd/braid run --repo <repo> --baseline baseline --remote <bare.git> --branch main --agent agent-1=agent/validation:v --agent agent-2=agent/ratelimit:r`
+  → green compute merge → bundle → CAS push advances remote `main`. Add `--tree` for the O(log N) fold.
 - **NEXT = Phase 3b/3c** (control plane; TS `worker/` + Queues/Workflow). The Phase-2 exit gate is met
   in-tree already (semantic case via rung-2 build + rung-5 metamorphic; region-confinement + AST bounds =
   2a; reproducibility twice across N agents = 2d/2e). 3b/3c is TS + real Cloudflare infra and needs real
   Artifacts creds to prove the Phase-3 gate — confirm scope before deploying. See `GO_PRODUCTION_PLAN.md`
   §3 Phase 3.
-- **Carry-over follow-ups (not blockers):** wire `merge.IntegrateTree` into `run.Service` behind a
-  `RunSpec` flag + per-agent incompatibility attribution over the tree (2e); surface `Options.Contracts`
-  through `run.RunSpec` so the metamorphic rung is reachable from the service/CLI (2c); real coverage
-  non-regression via Keploy to close the `t.Skip()` gap in `CountTestFuncs` (2a).
+- **Carry-over follow-ups (not blockers):** ~~wire `merge.IntegrateTree` into `run.Service`~~ DONE
+  (`RunSpec.Tree`); ~~surface `Options.Contracts` through `run.RunSpec`~~ DONE (`RunSpec.Contracts`);
+  still open → per-agent incompatibility attribution over the tree fold (2e; today a node escalates the
+  whole run); real coverage non-regression via Keploy to close the `t.Skip()` gap in `CountTestFuncs` (2a).
 
 ### TS hackathon pipeline (ON HOLD — reference only, not the current focus)
 - **Live dashboard:** https://braid-worker.kunalchandoa925.workers.dev/  (money-shot visual)
