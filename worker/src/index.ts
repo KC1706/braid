@@ -8,10 +8,20 @@
  * The orchestrator Durable Object and the agent loop build on top of this.
  */
 
+import { handleV1 } from "./v1/router";
+import { MapTokenStore, type Principal, type Role } from "./v1/auth";
+import { ArtifactsForker, DOIdempotencyStore, DORunsStore } from "./v1/stores";
+import { newSecret as newRunSecret, verify as verifyHmac, SIGNATURE_HEADER } from "./v1/hmac";
+import type { Run } from "./v1/lifecycle";
+
 interface Env {
   ARTIFACTS: ArtifactsNamespace;
   AI: { run(model: string, input: unknown): Promise<{ response?: string } & Record<string, unknown>> };
   ORCHESTRATOR: DurableObjectNamespace;
+  // CONTROL_TOKENS is a JSON map of bearer token -> { id, roles[] } for the /v1
+  // control plane (a Worker secret in prod). Absent -> /v1 has no valid tokens,
+  // so every /v1 request is 401 (fail closed), never open.
+  CONTROL_TOKENS?: string;
 }
 
 // Workers AI model used to reconcile a true conflict hunk. Overridable; a
@@ -51,6 +61,26 @@ const json = (data: unknown, status = 200) =>
     headers: { "content-type": "application/json" },
   });
 
+/**
+ * tokenStore builds the /v1 token store from the CONTROL_TOKENS secret (a JSON
+ * map token -> { id, roles }). A missing/invalid secret yields an empty store,
+ * so /v1 fails closed (every request 401) rather than open.
+ */
+function tokenStore(env: Env): MapTokenStore {
+  const m = new Map<string, Principal>();
+  try {
+    if (env.CONTROL_TOKENS) {
+      const parsed = JSON.parse(env.CONTROL_TOKENS) as Record<string, { id: string; roles: Role[] }>;
+      for (const [token, p] of Object.entries(parsed)) {
+        if (token && p?.id && Array.isArray(p.roles)) m.set(token, { id: p.id, roles: p.roles });
+      }
+    }
+  } catch {
+    /* malformed secret -> empty store (fail closed) */
+  }
+  return new MapTokenStore(m);
+}
+
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
@@ -59,9 +89,26 @@ export default {
       return json({
         service: "braid-worker",
         ok: true,
-        endpoints: ["/api/base", "/api/fork", "/api/resolve", "/runs/:id/event", "/runs/:id/ws", "/runs/:id/state"],
+        endpoints: [
+          "POST /v1/runs", "GET /v1/runs/:id", "POST /v1/runs/:id/{cancel,approve,reject}",
+          "/api/base", "/api/fork", "/api/resolve", "/runs/:id/event", "/runs/:id/ws", "/runs/:id/state",
+        ],
       });
     }
+
+    // The authenticated /v1 control plane. handleV1 returns null for non-/v1
+    // paths, so legacy routes below still work.
+    const v1 = await handleV1(req, {
+      tokens: tokenStore(env),
+      idem: new DOIdempotencyStore(env.ORCHESTRATOR),
+      runs: new DORunsStore(env.ORCHESTRATOR),
+      forker: new ArtifactsForker(env.ARTIFACTS as unknown as ConstructorParameters<typeof ArtifactsForker>[0]),
+      enqueue: async () => {}, // Phase 3c: a Queue consumer drives the run; no-op for now
+      now: () => new Date().toISOString(),
+      newId: () => `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      newSecret: newRunSecret,
+    });
+    if (v1) return v1;
 
     // Live run routes are handled by the per-run orchestrator Durable Object.
     // /runs/<id>/{ws,event,state} — the dashboard subscribes over WS; the
@@ -338,10 +385,45 @@ export class Orchestrator {
   async fetch(req: Request): Promise<Response> {
     await this.loaded;
     const url = new URL(req.url);
+
+    // Idempotency store (only used on the well-known control instance).
+    const idem = url.pathname.match(/^\/idem\/(.+)$/);
+    if (idem) {
+      const key = `idem:${decodeURIComponent(idem[1])}`;
+      if (req.method === "PUT") {
+        await this.ctx.storage.put(key, await req.json());
+        return json({ ok: true });
+      }
+      const rec = await this.ctx.storage.get(key);
+      return rec ? json(rec) : json({ error: "not found" }, 404);
+    }
+
     const m = url.pathname.match(/^\/runs\/([A-Za-z0-9_-]+)(\/.*)?$/);
     const runId = m?.[1] ?? "run";
     const sub = m?.[2] ?? "";
     if (this.state.runId === "run") this.state.runId = runId;
+
+    // Control-plane: seed this run's lifecycle record + per-run HMAC secret.
+    if (sub === "/init" && req.method === "POST") {
+      const { run, secret } = (await req.json()) as { run: Run; secret: string };
+      await this.ctx.storage.put("run", run);
+      await this.ctx.storage.put("secret", secret);
+      if (this.state.task === "") this.state.task = run.task;
+      await this.ctx.storage.put("state", this.state);
+      return json({ ok: true });
+    }
+
+    // Control-plane: read / update the lifecycle record (cancel/approve go here).
+    if (sub === "/record") {
+      if (req.method === "PUT") {
+        await this.ctx.storage.put("run", await req.json());
+        return json({ ok: true });
+      }
+      const run = await this.ctx.storage.get<Run>("run");
+      const secret = await this.ctx.storage.get<string>("secret");
+      if (!run) return json({ error: "run not found" }, 404);
+      return json({ run, secret });
+    }
 
     // Dashboard subscribes here.
     if (sub === "/ws") {
@@ -355,9 +437,23 @@ export class Orchestrator {
       return new Response(null, { status: 101, webSocket: client });
     }
 
-    // Pipeline posts structured events here.
+    // Pipeline posts structured events here. If this run was created through the
+    // /v1 control plane it has a per-run HMAC secret, and every event must carry
+    // a matching x-braid-signature over the raw body (C10). A run with no secret
+    // (the legacy demo path) is accepted unsigned, preserving today's behavior.
     if (sub === "/event" && req.method === "POST") {
-      const event = (await req.json().catch(() => null)) as BraidEvent | null;
+      const raw = await req.text();
+      const secret = await this.ctx.storage.get<string>("secret");
+      if (secret) {
+        const ok = await verifyHmac(secret, raw, req.headers.get(SIGNATURE_HEADER));
+        if (!ok) return json({ error: "invalid or missing event signature" }, 401);
+      }
+      let event: BraidEvent | null = null;
+      try {
+        event = raw ? (JSON.parse(raw) as BraidEvent) : null;
+      } catch {
+        event = null;
+      }
       if (!event || typeof event.type !== "string") {
         return json({ error: "invalid event" }, 400);
       }
