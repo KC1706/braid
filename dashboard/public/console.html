@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Braid Console</title>
+<style>
+  :root {
+    --bg: #0b0e14; --panel: #131824; --panel-2: #1a2130; --line: #273142;
+    --txt: #e6ebf2; --muted: #8a97ab; --accent: #7c9cff;
+    --a: #6ee7ff; --b: #c08bff; --c: #ffd166;
+    --green: #39d98a; --red: #ff6b6b; --amber: #ffbe55;
+    --radius: 12px; font-synthesis: none;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: radial-gradient(1100px 560px at 75% -12%, #15203a 0%, var(--bg) 55%);
+    color: var(--txt); font: 13.5px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Roboto, Inter, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); }
+  header {
+    display: flex; align-items: center; gap: 14px; padding: 14px 22px;
+    border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 10;
+    background: rgba(11,14,20,.84); backdrop-filter: blur(10px);
+  }
+  .brand { display: flex; align-items: baseline; gap: 10px; }
+  .brand h1 { font-size: 17px; margin: 0; letter-spacing: .3px; }
+  .brand .sub { color: var(--muted); font-size: 12px; }
+  .spacer { flex: 1; }
+  .conn { font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); }
+  .dot.on { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  input, select, textarea, button {
+    font: inherit; color: var(--txt); background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px;
+  }
+  input::placeholder, textarea::placeholder { color: #5c6678; }
+  button { cursor: pointer; background: var(--panel-2); }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: #1d2b57; border-color: #2e4792; color: #cdd9ff; }
+  button.danger { color: #ffb3b3; border-color: #5a2a2a; }
+  button.good { color: #b6f0d2; border-color: #1c4a34; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .layout { display: grid; grid-template-columns: 340px 1fr; gap: 16px; max-width: 1340px; margin: 0 auto; padding: 18px 22px 60px; }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+  .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 0; padding: 12px 14px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 8px; }
+  .card .body { padding: 12px 14px; }
+  .runs { list-style: none; margin: 0; padding: 0; max-height: 46vh; overflow: auto; }
+  .runs li { padding: 10px 14px; border-bottom: 1px solid var(--line); cursor: pointer; display: flex; flex-direction: column; gap: 3px; }
+  .runs li:hover { background: var(--panel-2); }
+  .runs li.sel { background: #16233f; box-shadow: inset 2px 0 0 var(--accent); }
+  .runs .rid { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; color: var(--a); }
+  .runs .rtask { color: var(--txt); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .runs .rmeta { color: var(--muted); font-size: 11px; display: flex; gap: 8px; align-items: center; }
+  .pill { font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+  .pill.queued { color: var(--c); border-color: #4a4120; background: #221f10; }
+  .pill.running { color: var(--a); border-color: #1d4a55; background: #0e2027; }
+  .pill.succeeded { color: var(--green); border-color: #1c4a34; background: #0f241a; }
+  .pill.failed, .pill.incompatible { color: var(--red); border-color: #522; background: #2a1313; }
+  .pill.canceled { color: var(--muted); }
+  .pill.awaiting_approval { color: var(--amber); border-color: #4a3a18; background: #231c0d; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px; }
+  .field label { font-size: 11px; color: var(--muted); }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .kv { display: grid; grid-template-columns: 120px 1fr; gap: 4px 12px; font-size: 12.5px; }
+  .kv .k { color: var(--muted); }
+  .kv .v { font-family: ui-monospace, Menlo, monospace; word-break: break-all; }
+  .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); padding: 0 10px; }
+  .tabs button { border: none; border-radius: 0; background: transparent; color: var(--muted); padding: 10px 12px; border-bottom: 2px solid transparent; }
+  .tabs button.on { color: var(--txt); border-bottom-color: var(--accent); }
+  .tabs button:hover { color: var(--txt); border-color: transparent; border-bottom-color: var(--line); }
+  .agents { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .agent { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+  .agent .id { font-family: ui-monospace, Menlo, monospace; color: var(--b); font-size: 12px; }
+  .agent .m { font-size: 11px; color: var(--muted); margin-top: 3px; }
+  .log { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; background: #0a0d13; border: 1px solid var(--line); border-radius: 10px; padding: 10px; max-height: 320px; overflow: auto; white-space: pre-wrap; }
+  .log .t { color: #4f5a6e; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .4px; }
+  td.num { text-align: right; font-family: ui-monospace, Menlo, monospace; }
+  .mono { font-family: ui-monospace, Menlo, monospace; }
+  .big { font-size: 26px; font-weight: 700; }
+  .muted { color: var(--muted); }
+  .ok { color: var(--green); } .bad { color: var(--red); }
+  .banner { padding: 9px 12px; border-radius: 9px; font-size: 12px; margin: 0 0 12px; display: none; }
+  .banner.show { display: block; }
+  .banner.err { color: #ffb3b3; background: #2a1313; border: 1px solid #522; }
+  .banner.info { color: #bcd2ff; background: #16233f; border: 1px solid #2e4792; }
+  .verify { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-weight: 700; font-size: 12px; }
+  .verify.green { color: var(--green); background: #0f241a; border: 1px solid #1c4a34; }
+  .verify.red { color: var(--red); background: #2a1313; border: 1px solid #522; }
+  code.tok { font-size: 11px; }
+  .hint { color: var(--muted); font-size: 11px; margin-top: 4px; }
+  .empty { color: var(--muted); padding: 28px 14px; text-align: center; font-size: 13px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><h1>Braid</h1><span class="sub">operator console · /v1</span></div>
+  <div class="spacer"></div>
+  <div class="conn"><span id="conn-dot" class="dot"></span><span id="conn-txt">no token</span></div>
+  <input id="token" type="password" placeholder="operator bearer token" style="width: 260px" />
+  <button id="save-token" class="primary">Connect</button>
+</header>
+
+<div class="layout">
+  <!-- LEFT: run list + new run -->
+  <div>
+    <div class="card" style="margin-bottom: 16px;">
+      <h2>Runs <span class="spacer" style="flex:1"></span><button id="refresh" title="refresh" style="padding:3px 8px;font-size:11px">↻</button></h2>
+      <ul id="runs" class="runs"><li class="empty">Connect with a token to list runs.</li></ul>
+    </div>
+    <div class="card">
+      <h2>New run</h2>
+      <div class="body">
+        <div class="field"><label>Base repo name (Artifacts)</label><input id="nr-base" placeholder="braid-base-xyz" /></div>
+        <div class="field"><label>Agents (comma-separated)</label><input id="nr-agents" placeholder="agent-1, agent-2, agent-3" /></div>
+        <div class="field"><label>Task</label><textarea id="nr-task" rows="2" placeholder="harden the API"></textarea></div>
+        <button id="nr-create" class="primary">Start run →</button>
+        <div class="hint">Forks the base once per agent, mints scoped tokens, and enqueues the two-zone Workflow.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: selected run -->
+  <div class="card">
+    <h2 id="detail-title">Run detail</h2>
+    <div id="banner" class="banner"></div>
+    <div class="tabs">
+      <button data-tab="live" class="on">Live</button>
+      <button data-tab="audit">Audit &amp; lineage</button>
+      <button data-tab="cost">Economics</button>
+    </div>
+    <div class="body" id="detail-body">
+      <div class="empty">Select a run on the left, or start one.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = (s, r = document) => r.querySelector(s);
+const el = (t, cls, txt) => { const e = document.createElement(t); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
+const state = { token: "", runs: [], selected: null, tab: "live", poll: null, detail: null };
+
+function setToken(t) {
+  state.token = t || "";
+  try { t ? localStorage.setItem("braid_token", t) : localStorage.removeItem("braid_token"); } catch {}
+  $("#conn-dot").classList.toggle("on", !!t);
+  $("#conn-txt").textContent = t ? "connected" : "no token";
+}
+function banner(msg, kind = "info") {
+  const b = $("#banner");
+  if (!msg) { b.className = "banner"; return; }
+  b.className = "banner show " + kind; b.textContent = msg;
+  if (kind === "info") setTimeout(() => { b.className = "banner"; }, 3500);
+}
+
+async function api(path, opts = {}) {
+  const headers = Object.assign({ authorization: "Bearer " + state.token }, opts.headers || {});
+  if (opts.body) headers["content-type"] = "application/json";
+  const res = await fetch(path, Object.assign({}, opts, { headers }));
+  const text = await res.text();
+  let data; try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
+  if (!res.ok) throw Object.assign(new Error(data.error || res.statusText), { status: res.status, data });
+  return data;
+}
+
+// ---- run list -------------------------------------------------------------
+async function loadRuns() {
+  if (!state.token) return;
+  try {
+    const { runs } = await api("/v1/runs?limit=100");
+    state.runs = runs || [];
+    renderRuns();
+  } catch (e) { banner("list runs: " + e.message, "err"); }
+}
+function renderRuns() {
+  const ul = $("#runs"); ul.innerHTML = "";
+  if (!state.runs.length) { ul.appendChild(el("li", "empty", "No runs yet.")); return; }
+  for (const r of state.runs) {
+    const li = el("li"); if (state.selected === r.id) li.classList.add("sel");
+    li.onclick = () => selectRun(r.id);
+    const top = el("div", "rtask", r.task || "(no task)");
+    const rid = el("div", "rid", r.id);
+    const meta = el("div", "rmeta");
+    meta.appendChild(pill(r.status));
+    meta.appendChild(el("span", null, r.agents + " agents"));
+    li.append(top, rid, meta); ul.appendChild(li);
+  }
+}
+function pill(status) { return el("span", "pill " + status, (status || "").replace(/_/g, " ")); }
+
+// ---- selection + polling --------------------------------------------------
+async function selectRun(id) {
+  state.selected = id; state.tab = state.tab || "live";
+  renderRuns();
+  $("#detail-title").textContent = "Run " + id;
+  if (state.poll) clearInterval(state.poll);
+  await refreshDetail();
+  state.poll = setInterval(refreshDetail, 2500);
+}
+async function refreshDetail() {
+  if (!state.selected) return;
+  try {
+    const [run, live] = await Promise.all([
+      api("/v1/runs/" + state.selected),
+      api("/v1/runs/" + state.selected + "/live").catch(() => null),
+    ]);
+    state.detail = { run, live };
+    renderDetail();
+    // stop polling terminal runs after a final paint
+    if (["succeeded", "failed", "incompatible", "canceled"].includes(run.status) && state.poll) {
+      // keep one more cycle for lineage/cost freshness, then relax
+    }
+  } catch (e) { banner("load run: " + e.message, "err"); }
+}
+
+// ---- tabs -----------------------------------------------------------------
+function renderDetail() {
+  const d = state.detail; if (!d) return;
+  if (state.tab === "live") renderLive(d);
+  else if (state.tab === "audit") renderAudit(d);
+  else if (state.tab === "cost") renderCost(d);
+}
+
+function actionsBar(run) {
+  const bar = el("div", "row"); bar.style.marginBottom = "12px";
+  const mk = (label, action, cls, perm) => {
+    const b = el("button", cls, label);
+    b.onclick = async () => {
+      b.disabled = true;
+      try { await api("/v1/runs/" + run.id + "/" + action, { method: "POST" }); banner(label + " ✓", "info"); await refreshDetail(); await loadRuns(); }
+      catch (e) { banner(label + ": " + e.message + (e.status === 403 ? " (needs higher role)" : ""), "err"); b.disabled = false; }
+    };
+    return b;
+  };
+  bar.appendChild(el("span", null, "")).appendChild(pill(run.status));
+  const terminal = ["succeeded", "failed", "incompatible", "canceled"].includes(run.status);
+  if (!terminal) bar.appendChild(mk("Cancel", "cancel", "danger"));
+  if (run.status === "awaiting_approval") { bar.appendChild(mk("Approve", "approve", "good")); bar.appendChild(mk("Reject", "reject", "danger")); }
+  return bar;
+}
+
+function renderLive({ run, live }) {
+  const body = $("#detail-body"); body.innerHTML = "";
+  body.appendChild(actionsBar(run));
+
+  const kv = el("div", "kv");
+  const add = (k, v) => { kv.appendChild(el("div", "k", k)); kv.appendChild(el("div", "v", v)); };
+  add("base", run.base);
+  add("task", run.task || "—");
+  add("created", new Date(run.createdAt).toLocaleString());
+  add("updated", new Date(run.updatedAt).toLocaleString());
+  if (run.mergedSha) add("merged sha", run.mergedSha);
+  if (run.verdict) add("verdict", run.verdict);
+  body.appendChild(kv);
+
+  if (live && live.result) {
+    const v = el("div"); v.style.margin = "12px 0";
+    const g = live.result.green;
+    const badge = el("span", "verify " + (g ? "green" : "red"), (g ? "✅ GREEN" : "❌ RED") + " — " + (live.result.finalTest || ""));
+    v.appendChild(badge); body.appendChild(v);
+  }
+
+  if (live && live.agents && Object.keys(live.agents).length) {
+    body.appendChild(el("h3", "muted", "")).textContent = "";
+    const title = el("div", "muted"); title.style.margin = "14px 0 6px"; title.textContent = "AGENTS";
+    body.appendChild(title);
+    const grid = el("div", "agents");
+    const order = live.agentOrder && live.agentOrder.length ? live.agentOrder : Object.keys(live.agents);
+    for (const id of order) {
+      const a = live.agents[id]; if (!a) continue;
+      const card = el("div", "agent");
+      card.appendChild(el("div", "id", a.id));
+      card.appendChild(el("div", "m", "merge: " + (a.merge || "—")));
+      card.appendChild(el("div", "m", a.test ? "test: " + a.test : "intent: " + (a.intent || "—")));
+      grid.appendChild(card);
+    }
+    body.appendChild(grid);
+  }
+
+  if (live && live.conflicts && live.conflicts.length) {
+    const title = el("div", "muted"); title.style.margin = "14px 0 6px"; title.textContent = "CONFLICTS";
+    body.appendChild(title);
+    const tbl = el("table");
+    tbl.innerHTML = "<tr><th>agent</th><th>path</th><th>strategy</th><th>attempts</th><th>status</th></tr>";
+    for (const c of live.conflicts) {
+      const tr = el("tr");
+      tr.innerHTML = `<td class="mono">${esc(c.agent)}</td><td class="mono">${esc(c.path)}</td><td>${esc(c.strategy)}</td><td class="num">${c.attempts}</td><td>${esc(c.status)}</td>`;
+      tbl.appendChild(tr);
+    }
+    body.appendChild(tbl);
+  }
+
+  const title = el("div", "muted"); title.style.margin = "14px 0 6px"; title.textContent = "EVENT LOG" + (live ? " · seq " + (live.seq ?? 0) : "");
+  body.appendChild(title);
+  const log = el("div", "log");
+  const lines = (live && live.log) || [];
+  if (!lines.length) log.textContent = "(no events yet)";
+  for (const l of lines) {
+    const row = el("div");
+    row.appendChild(el("span", "t", new Date(l.ts).toLocaleTimeString() + "  "));
+    row.appendChild(document.createTextNode(l.line));
+    log.appendChild(row);
+  }
+  body.appendChild(log);
+  log.scrollTop = log.scrollHeight;
+}
+
+async function renderAudit({ run }) {
+  const body = $("#detail-body"); body.innerHTML = "";
+  body.appendChild(el("div", "muted", "The signed provenance ledger (Ed25519 hash chain in R2) and the rebuild proof — the DO's live state must equal a replay of its event log."));
+
+  // Rebuild proof
+  const proof = el("div"); proof.style.margin = "14px 0";
+  proof.appendChild(el("span", "muted", "Rebuild proof: "));
+  const status = el("span", "mono", "checking…"); proof.appendChild(status); body.appendChild(proof);
+  try {
+    const [live, rebuilt] = await Promise.all([
+      api("/v1/runs/" + run.id + "/live"),
+      api("/v1/runs/" + run.id + "/rebuild"),
+    ]);
+    const same = JSON.stringify(live) === JSON.stringify(rebuilt);
+    status.textContent = same ? "rebuild == live state ✓ (log-rebuildable)" : "MISMATCH ✗";
+    status.className = "mono " + (same ? "ok" : "bad");
+  } catch (e) { status.textContent = "n/a: " + e.message; }
+
+  // Ledger chain
+  const title = el("div", "muted"); title.style.margin = "16px 0 6px"; title.textContent = "SIGNED LEDGER (R2)";
+  body.appendChild(title);
+  try {
+    const records = await api("/v1/runs/" + run.id + "/ledger");
+    if (!Array.isArray(records) || !records.length) { body.appendChild(el("div", "empty", "No ledger records (signing key may be unset).")); }
+    else {
+      const tbl = el("table");
+      tbl.innerHTML = "<tr><th>#</th><th>kind</th><th>content hash</th><th>sig</th></tr>";
+      records.forEach((r, i) => {
+        const tr = el("tr");
+        const h = r.hash || r.contentHash || ""; const sig = r.sig || r.signature || "";
+        tr.innerHTML = `<td class="num">${i}</td><td>${esc(r.kind || "")}</td><td class="mono">${esc(String(h).slice(0, 16))}…</td><td class="mono">${esc(String(sig).slice(0, 12))}…</td>`;
+        tbl.appendChild(tr);
+      });
+      body.appendChild(tbl);
+      const vf = el("div", "hint"); vf.style.marginTop = "8px";
+      vf.textContent = "Verify offline: braid ledger verify --pub <public-key> (chain is tamper-evident; mutate any record and the signature/hash check fails).";
+      body.appendChild(vf);
+    }
+  } catch (e) {
+    body.appendChild(el("div", "empty", e.status === 501 ? "Ledger not configured on this deployment." : "ledger: " + e.message));
+  }
+
+  // History
+  const ht = el("div", "muted"); ht.style.margin = "16px 0 6px"; ht.textContent = "LIFECYCLE HISTORY";
+  body.appendChild(ht);
+  const tbl = el("table");
+  tbl.innerHTML = "<tr><th>at</th><th>action</th><th>from → to</th><th>note</th></tr>";
+  for (const h of (run.history || [])) {
+    const tr = el("tr");
+    tr.innerHTML = `<td class="mono">${esc(new Date(h.at).toLocaleTimeString())}</td><td>${esc(h.action)}</td><td class="mono">${esc((h.from||"∅")+" → "+h.to)}</td><td>${esc(h.note||"")}</td>`;
+    tbl.appendChild(tr);
+  }
+  body.appendChild(tbl);
+}
+
+async function renderCost({ run }) {
+  const body = $("#detail-body"); body.innerHTML = "";
+  body.appendChild(el("div", "muted", "Per-run cost estimate over the documented Cloudflare price sheet, against Braid's published $/run price. The economics gate requires a positive margin."));
+  try {
+    const c = await api("/v1/runs/" + run.id + "/cost");
+    const head = el("div", "row"); head.style.margin = "16px 0"; head.style.gap = "28px";
+    const col = (label, val, cls) => { const d = el("div"); d.appendChild(el("div", "muted", label)); d.appendChild(el("div", "big " + (cls||""), val)); return d; };
+    head.appendChild(col("cost / run", "$" + fmt(c.costUsd)));
+    head.appendChild(col("price / run", "$" + fmt(c.priceUsd)));
+    head.appendChild(col("margin", "$" + fmt(c.marginUsd), c.marginUsd > 0 ? "ok" : "bad"));
+    head.appendChild(col("margin %", Math.round(c.marginPct * 100) + "%", c.marginUsd > 0 ? "ok" : "bad"));
+    body.appendChild(head);
+
+    const tbl = el("table");
+    tbl.innerHTML = "<tr><th>item</th><th class='num'>qty</th><th>unit</th><th class='num'>unit $</th><th class='num'>$</th></tr>";
+    for (const l of c.lines) {
+      const tr = el("tr");
+      tr.innerHTML = `<td>${esc(l.item)}</td><td class="num">${l.qty}</td><td class="muted">${esc(l.unit)}</td><td class="num">${l.unitUsd}</td><td class="num">$${fmt(l.usd)}</td>`;
+      tbl.appendChild(tr);
+    }
+    body.appendChild(tbl);
+    body.appendChild(el("div", "hint", "Conservative estimate from the run's wall time, swarm size and projection (conflict resolutions ≈ AI merges). Real container/AI meters refine these in Phase 6."));
+  } catch (e) { body.appendChild(el("div", "empty", "cost: " + e.message)); }
+}
+
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function fmt(n) { return (Math.round(n * 1e6) / 1e6).toFixed(n < 0.01 ? 6 : 4); }
+
+// ---- wiring ---------------------------------------------------------------
+$("#save-token").onclick = () => { setToken($("#token").value.trim()); loadRuns(); };
+$("#token").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#save-token").click(); });
+$("#refresh").onclick = loadRuns;
+for (const b of document.querySelectorAll(".tabs button")) {
+  b.onclick = () => {
+    for (const x of document.querySelectorAll(".tabs button")) x.classList.toggle("on", x === b);
+    state.tab = b.dataset.tab; renderDetail();
+  };
+}
+$("#nr-create").onclick = async () => {
+  const base = $("#nr-base").value.trim();
+  if (!base) { banner("base repo name is required", "err"); return; }
+  const agents = $("#nr-agents").value.split(",").map((s) => s.trim()).filter(Boolean);
+  const btn = $("#nr-create"); btn.disabled = true;
+  try {
+    const body = { base, task: $("#nr-task").value.trim() };
+    if (agents.length) body.agents = agents;
+    const run = await api("/v1/runs", { method: "POST", body: JSON.stringify(body) });
+    banner("run " + run.id + " started", "info");
+    await loadRuns(); selectRun(run.id);
+  } catch (e) { banner("create: " + e.message, "err"); }
+  finally { btn.disabled = false; }
+};
+
+// boot
+(function () {
+  let t = ""; try { t = localStorage.getItem("braid_token") || ""; } catch {}
+  if (t) { $("#token").value = t; setToken(t); loadRuns(); }
+  setInterval(() => { if (state.token && !state.selected) loadRuns(); }, 5000);
+})();
+</script>
+</body>
+</html>
