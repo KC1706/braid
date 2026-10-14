@@ -3,7 +3,39 @@
 > Cross-session memory. Update this at the end of every work session: what changed, what's next,
 > what's blocked. Newest entry on top. See `plan.md` for the full plan.
 
-**Deadline:** 2026-10-14 · **Today:** 2026-10-14 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1–3 COMPLETE & DEPLOYED LIVE** on `braid-worker.kunalchandoa925.workers.dev` (account `06bff0b6…`). Phase 3c (Containers + durable Workflow) is live and the **full Phase-3 deploy gate PASSED** — an external client drove the two-zone pipeline through `POST /v1/runs` on a real Artifacts base, and the red-team (no token + default-deny egress in the compute zone, proven by a green block-probe AND a red require-probe) holds end-to-end. Next = Phase 4 (Base-Coordinator DO + signed ledger). (hackathon submission on hold — user pivot)
+**Deadline:** 2026-10-14 · **Today:** 2026-10-14 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1–3 COMPLETE & DEPLOYED LIVE** + **Phase 4a/4b DONE** on `braid-worker.kunalchandoa925.workers.dev` (account `06bff0b6…`). Base-Coordinator (per-base lease + parent-SHA CAS) is live and the **Phase-4 concurrency gate PASSED live** — two concurrent same-base runs: one published, the other was CAS-rejected (base_moved), base intact, no duplicate. Signed tamper-evident ledger (`internal/ledger`) built + unit-proven. Next = Phase 4 finish (auto-rebase the base_moved loser; wire ledger → R2 per-step; 4c seq-numbered events) then Phase 5 (console). (hackathon submission on hold — user pivot)
+
+## ✅ 2026-10-14 — Phase 4a + 4b: Base-Coordinator (live concurrency gate PASSED) + signed ledger
+- **4a Base-Coordinator (C8) — DEPLOYED & PROVEN LIVE.** One coordinator per base serializes publishes in
+  front of gitio's git-level `--force-with-lease` (still the ultimate guard).
+  - `worker/src/v1/coordinator.ts` — pure state machine: `beginPublish` grants the base lease iff it is free
+    (or already this run's) AND the run's merged-from SHA still equals the coordinator's current tip (CAS on the
+    parent SHA); stale → `base_moved`, held → `busy`. `commitPublish` advances the tip + releases; TTL lease so a
+    crashed run can't deadlock a base; first run adopts its base SHA (TOFU). **10 unit tests** incl. the race.
+  - `coordinator-do.ts` — `BaseCoordinator` DO (one per base key) + client. `workflow.ts` publish now goes
+    through it: a `coord:begin` step retries only while BUSY; `base_moved` is thrown so `runIntegration` → the
+    base_moved outcome (no retry); on a grant, io.publish + commit run as one step (abort-on-failure). New DO
+    binding + v3 migration; `job.baseKey = run.base`.
+  - **LIVE GATE PASSED:** fired two concurrent `POST /v1/runs` on one seeded base (distinct agent names). Run A
+    → succeeded, published merge `6ba83226`; Run B → computed its own merge from the same baseline but the
+    coordinator **CAS-rejected its publish ("base moved")** → B did NOT publish. Base remote `main` = `6ba83226`
+    (A's merge, **not clobbered**); published-guard store: A=`[6ba83226]`, B=`[]` (**no duplicate**). Exactly one
+    of two racing runs published; the other was safely refused.
+- **4b Signed ledger (`internal/ledger`, C17/C18) — built + tamper-proven (offline).** Append-only SHA-256 hash
+  chain; each `Record` carries `Hash` (SHA-256 over canonical contents via `determinism.ContentHash`) + `PrevHash`
+  (links the chain) and an **Ed25519 signature** over the hash (stdlib; verify needs only the public key).
+  Storage-agnostic `Store` (MemStore + JSON FileStore, both append-only/no-gaps; prod = object-locked R2/WORM).
+  **8 unit tests**: clean verify, mutated-payload detected, forged-hash-without-key caught by the signature,
+  removed/reordered record detected, wrong public key rejected, non-contiguous seq rejected, file round-trip.
+- **Phase-4 exit gate status:** no non-fast-forward data loss ✅ (live), no duplicate runs ✅ (live), ledger
+  tamper-evident ✅ (unit), no self-trigger ✅ (`isSelfPush` + guard store; external Artifacts→Worker webhook
+  still unwired so nothing can loop yet). Commits `297442c` (ledger), `b0677a3` (coordinator), this doc.
+- **Known Phase-4 follow-ups:** (1) the base_moved loser is NOT auto-rebased/retried yet — it stays `running`
+  until cancelled (the CAS prevents the clobber, which is the safety-critical half; auto-rebase is next). (2) the
+  ledger primitive is not yet written to during a live run — needs an R2 object-locked `Store` + per-step
+  `Append` in the Workflow. (3) 4c (seq-numbered Orchestrator events + blobs→R2, rebuildable) not started; the DO
+  already persists reduced state. (4) each run gets its own compute/io container instance (`*-${runId}`) → per-run
+  isolation (good for security) at the cost of a cold start per run.
 
 ## ✅ 2026-10-14 — Phase 3c COMPLETE & DEPLOYED: two-zone Containers + durable Workflow; deploy gate PASSED
 - **Architecture (two Cloudflare Containers, one braid image, zone by `BRAID_ZONE`):**
