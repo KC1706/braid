@@ -88,6 +88,10 @@ function pushLog(s: RunState, ts: number, line: string) {
  * the same (event, meta) log reproduces the state byte-for-byte.
  */
 export function reduce(s: RunState, e: BraidEvent, meta: EventMeta): RunState {
+  // Anchor startedAt to the FIRST event's receive time so the value is derived
+  // from the log, not a wall clock — keeping a rebuild byte-identical to the live
+  // projection (the live DO may have been constructed before the first event).
+  if (meta.seq === 1) s.startedAt = meta.ts;
   s.updatedAt = meta.ts;
   s.seq = meta.seq;
   const ts = meta.ts;

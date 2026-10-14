@@ -66,6 +66,14 @@ export interface IntegrationOutcome {
  * "base_moved" (the caller/Workflow may rebase + retry; Phase 4's coordinator).
  */
 export async function runIntegration(deps: IntegrationDeps, job: IntegrationJob): Promise<IntegrationOutcome> {
+  // run:init is the first event, so the projection is fully rebuildable from the
+  // log alone (task + the agent roster live in the stream, not a side channel).
+  await deps.emit({
+    type: "run:init",
+    task: job.task ?? "",
+    mode: "swarm",
+    agents: job.agents.map((a) => ({ id: a.id, branch: `agent/${a.id}`, intent: a.intent ?? "" })),
+  });
   await deps.emit({ type: "log", line: `snapshotting base + ${job.agents.length} fork(s)` });
 
   // --- io zone: assemble the prepared bundle (holds tokens) ---

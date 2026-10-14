@@ -35,11 +35,22 @@ describe("runstate reducer", () => {
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
   });
 
-  it("tracks seq and updatedAt from meta, never a wall clock", () => {
+  it("tracks seq, updatedAt and startedAt from meta, never a wall clock", () => {
     const log = logOf(EVENTS, 5000);
     const s = foldIncremental("run-1", log);
     expect(s.seq).toBe(EVENTS.length);
     expect(s.updatedAt).toBe(5000 + EVENTS.length - 1);
+    expect(s.startedAt).toBe(5000); // anchored to the first event, not construction
+  });
+
+  it("rebuild is independent of the start state's startedAt (log-anchored)", () => {
+    const log = logOf(EVENTS, 5000);
+    // A live DO constructed at a different time still rebuilds identically, because
+    // seq-1 re-anchors startedAt to the first event's ts.
+    const live = foldIncremental("run-1", log); // start = log[0].ts
+    const rebuilt = rebuild("run-1", log); // start = log[0].ts too, but startedAt is re-set anyway
+    expect(rebuilt.startedAt).toBe(5000);
+    expect(JSON.stringify(rebuilt)).toBe(JSON.stringify(live));
   });
 
   it("projects the expected run shape", () => {
