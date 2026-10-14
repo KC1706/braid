@@ -42,6 +42,13 @@ export class IntegrationWorkflow extends WorkflowEntrypoint<WorkflowEnv, Integra
     const io = new ContainerZoneClient(this.env.IO_ZONE, `io-${job.runId}`, true);
     const compute = new ContainerZoneClient(this.env.COMPUTE_ZONE, `compute-${job.runId}`, false);
 
+    // Claim the run: queued -> running. Idempotent — a Workflow replay re-runs this
+    // step, and applyAction simply no-ops if the run already left queued.
+    await step.do("lifecycle:start", stepRetry, async () => {
+      await this.advance(job.runId, "start", "workflow picked up");
+      return true;
+    });
+
     // Each zone call is its own durable step so a transient failure retries just
     // that call. The tested runIntegration drives the sequence; the clients here
     // record their results into the Workflow's step state. step.do returns a
@@ -76,7 +83,13 @@ export class IntegrationWorkflow extends WorkflowEntrypoint<WorkflowEnv, Integra
 
     // Reconcile the lifecycle record with the outcome (succeeded/failed/...).
     await step.do("lifecycle:finalize", stepRetry, async () => {
-      await this.finalize(job.runId, outcome);
+      const action = outcomeToAction(outcome.status);
+      if (action) {
+        await this.advance(job.runId, action, outcome.verdict, {
+          verdict: outcome.verdict,
+          ...(outcome.pushedSha ? { mergedSha: outcome.pushedSha } : {}),
+        });
+      }
       return true;
     });
     return outcome;
@@ -103,15 +116,19 @@ export class IntegrationWorkflow extends WorkflowEntrypoint<WorkflowEnv, Integra
     if (!res.ok) throw new Error(`recordPush: ${res.status}`);
   }
 
-  private async finalize(runId: string, outcome: IntegrationOutcome): Promise<void> {
+  /**
+   * advance applies a lifecycle action to the stored run and persists it. An
+   * illegal/terminal transition (e.g. the run was canceled, or a replay re-applies
+   * an action) is a silent no-op, so steps stay idempotent. `extra` patches fields
+   * like verdict/mergedSha onto the advanced record.
+   */
+  private async advance(runId: string, action: RunAction, note: string, extra?: Partial<Run>): Promise<void> {
     const got = await this.stub(runId).fetch(new Request(`${DO_BASE}/runs/${runId}/record`));
     if (!got.ok) return; // run record gone; nothing to reconcile
     const { run } = (await got.json()) as { run: Run };
-    const action = outcomeToAction(outcome.status);
-    if (!action) return;
-    const res = applyAction(run, action, new Date().toISOString(), outcome.verdict);
-    if (!res.ok) return; // already terminal (e.g. canceled) — leave it
-    const finalRun: Run = { ...res.run, verdict: outcome.verdict, mergedSha: outcome.pushedSha ?? res.run.mergedSha };
+    const res = applyAction(run, action, new Date().toISOString(), note);
+    if (!res.ok) return; // illegal/terminal — leave it
+    const finalRun: Run = { ...res.run, ...(extra ?? {}) };
     await this.stub(runId).fetch(
       new Request(`${DO_BASE}/runs/${runId}/record`, { method: "PUT", body: JSON.stringify(finalRun) }),
     );

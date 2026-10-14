@@ -11,8 +11,11 @@
   // Phase 3c: the two compute Containers (one braid image, zone chosen by
   // BRAID_ZONE in each class). Both build from the repo-root Dockerfile.
   "containers": [
-    { "class_name": "ComputeZone", "image": "../Dockerfile", "image_build_context": "..", "max_instances": 5 },
-    { "class_name": "IOZone", "image": "../Dockerfile", "image_build_context": "..", "max_instances": 5 }
+    // Compute zone compiles + runs the agents' Go tests, so it needs real CPU/RAM
+    // (lite = 1/16 vCPU / 256 MiB can't build Go). standard-2 = 1 vCPU / 6 GiB.
+    { "class_name": "ComputeZone", "image": "../Dockerfile", "image_build_context": "..", "max_instances": 5, "instance_type": "standard-2" },
+    // IO zone only runs git (clone/fetch/CAS-push); basic = 1/4 vCPU / 1 GiB.
+    { "class_name": "IOZone", "image": "../Dockerfile", "image_build_context": "..", "max_instances": 5, "instance_type": "basic" }
   ],
   // Phase 3c: the durable consumer that drives one run's two-zone pipeline.
   "workflows": [

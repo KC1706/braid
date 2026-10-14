@@ -6,6 +6,10 @@ node_modules
 worker
 dashboard
 hackathon
+agent
+baseline
+integrator
+scripts
 .wrangler
 dist
 coverage
