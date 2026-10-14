@@ -3,7 +3,39 @@
 > Cross-session memory. Update this at the end of every work session: what changed, what's next,
 > what's blocked. Newest entry on top. See `plan.md` for the full plan.
 
-**Deadline:** 2026-10-14 · **Today:** 2026-10-14 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1 COMPLETE** + **Phase 2a + 2d + 2e done** (resolution guards + determinism + parallel tree merge); next = Phase 2b/2c rungs 0 & 5, then the Phase 2 exit gate (hackathon submission on hold — user pivot)
+**Deadline:** 2026-10-14 · **Today:** 2026-10-14 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1 COMPLETE** + **Phase 2a + 2b + 2c + 2d + 2e done** (resolution guards + contract-first + metamorphic + determinism + parallel tree merge); next = the Phase 2 exit-gate writeup, then Phase 3 (hackathon submission on hold — user pivot)
+
+## ✅ 2026-10-14 — Phase 2b/2c done: rung-0 contract-first + rung-5 metamorphic (`internal/contract`, wired into the engine)
+- New **`internal/contract`** (pure; `determinism` + stdlib only, no git/I/O — the engine owns checkouts):
+  - **Rung 0 (contract-first, `contract.go`):** `Check{Name,Package,Test}` + `Contract{Agent,Intent,Checks}`.
+    `Contract.Hash()` = order-independent content hash over the canonicalized checks (reorder → same hash;
+    change WHAT is asserted → different hash). `Freeze(c, at)` → `Frozen{Contract,SpecHash,FrozenAt}`;
+    `Frozen.Verify()` returns `ErrSpecTampered` if the spec was edited after freezing (the "spec frozen +
+    content-hashed BEFORE code" guarantee). `Contract.MissingTests(testSrcs)` = static "test exists before
+    code" check (regex over `func Test…`, mirrors `ladder.CountTestFuncs`).
+  - **Rung 5 (metamorphic, `metamorphic.go`):** `CheckRunner` seam + `TakeSnapshot` (run a contract's checks
+    on a tree) + pure `diffSnapshots` + `CheckPreservation`. The relation: a check that **passed on an
+    agent's own fork** must still RUN AND PASS on the merged tree — else a `Violation` (`regressed` |
+    `did-not-run`). A fork-failing check imposes no obligation. `GoTestRunner` implements `CheckRunner` over
+    the **same `exec.Executor` seam** (`go test -run ^T$ -count=1 -json pkg`), so it runs in the sandbox too.
+- **Wired into the engine (`merge.Integrate`):** `Options.Contracts []contract.Contract` + optional
+  `Options.MetamorphicRunner` (nil → local `GoTestRunner`). After a build/test-green final verify, Rung 5
+  snapshots each INTEGRATED agent's contract on its own fork, restores the integration branch, then
+  `CheckPreservation` on the merged tree. A violation flips the run to **red** and is recorded in the trail
+  (`models.MetamorphicRecord` + `ContractViolation`, new `Trail.Metamorphic`). Empty `Contracts` → rung
+  skipped (production/default path unchanged). Emits `verify(metamorphic)`.
+- Tests: `internal/contract` (hash order-independence + tamper detection + MissingTests; `CheckPreservation`
+  both-survive / dropped+regressed / fork-failure-ignored; `GoTestRunner` pass/fail/did-not-run json folding
+  via a canned exec). **Real git+go fixtures in `internal/merge/metamorphic_test.go`** with the REAL
+  `GoTestRunner`: (1) validation + rate-limit each green on their fork → union merge satisfies BOTH
+  contracts (0 violations = the Phase-2 exit-gate "both features survived" case); (2) a **pick-winner merge
+  that drops rate-limiting builds CLEAN yet Rung 5 catches it** where the build rung (Rung 2) cannot; plus
+  engine-level green-path (Checked=2, stays green) and red-path (injected regression flips a build+test-green
+  merge to red). **Full suite + vet green; `demo` verdict identical (3 merged · 1 conflict · 0 LLM).**
+- **NEXT = Phase 2 exit-gate writeup, then Phase 3.** The gate's three legs are now all met in-tree:
+  conflict corpus incl. a *semantic no-textual-conflict* case (rung-2 build catches Go cross-pkg breakage;
+  rung-5 catches behavior loss on a clean build — the stronger semantic case); region-confinement + AST
+  bounds rejection = 2a; reproducibility twice across N agents = 2d/2e. Carry-overs below still open.
 
 ## ✅ 2026-10-14 — Phase 2e done: parallel tree merge (`internal/treemerge` + `merge.IntegrateTree`)
 - New **`internal/treemerge`** (pure, no git/I/O) — plans the fold SHAPE: `Plan(n)` builds a balanced
@@ -246,7 +278,7 @@
 
 ## HOW TO RESUME (run these)
 
-### ▶ GO PRODUCTION (current focus — read the top entry, then start Phase 2b/2c rungs 0 & 5)
+### ▶ GO PRODUCTION (current focus — read the top entry, then do the Phase 2 exit-gate writeup → Phase 3)
 - Sanity (all green): `go build ./... && go vet ./... && go test ./...`
 - Engine demo (local): `go run ./cmd/braid demo`  → verdict green, 3 merged · 1 conflict · 0 LLM
 - Engine demo (sandboxed, no creds + egress-deny): `go run ./cmd/braid demo --sandbox`  (same verdict)
@@ -254,20 +286,20 @@
 - Stream to the deployed DO: set `BRAID_WORKER_URL=https://braid-worker.kunalchandoa925.workers.dev`
   before `demo`/`serve`; it prints a `…/?run=<id>` URL. (Vocabulary gap: Go emits `merge:start`/
   `verify(final)`, not TS `run:init`/`run:done` — old dashboard reducer won't fully drive; Phase 5 aligns.)
-- **DONE so far in Phase 2:** 2a resolution guards (`internal/ladder/resolution_guard.go`), 2d
-  determinism (`internal/determinism` + `resolver.CachingResolver` + temp-0/digest + `Options.CanonicalOrder`),
-  2e parallel tree merge (`internal/treemerge` + `merge.IntegrateTree`). All green, pushed. See the dated
-  entries at the TOP of this file for the full detail on each.
-- **NEXT (Phase 2b/2c — rungs 0 & 5; ship minimal first):** rung 0 = each subtask carries a
-  machine-readable acceptance spec, frozen + content-hashed before code (new `internal/contract`); rung 5
-  = metamorphic — golden snapshots of each agent's observable behavior on its own fork; assert the merged
-  system still satisfies EVERY agent's contract ("both features survived"). Then meet the **Phase 2 exit
-  gate** (conflict corpus incl. a semantic no-textual-conflict case [rung-2 build already catches Go cross-
-  pkg breakage]; region-confinement + AST-bounds rejection = DONE 2a; reproducibility twice across N agents
-  = DONE 2d/2e). See `GO_PRODUCTION_PLAN.md` §3 Phase 2 + §4.
+- **DONE so far in Phase 2 (ALL rungs):** 2a resolution guards (`internal/ladder/resolution_guard.go`);
+  2b/2c contract-first + metamorphic (`internal/contract` + `merge.Options.Contracts`/`MetamorphicRunner`
+  + `Trail.Metamorphic`); 2d determinism (`internal/determinism` + `resolver.CachingResolver` +
+  temp-0/digest + `Options.CanonicalOrder`); 2e parallel tree merge (`internal/treemerge` +
+  `merge.IntegrateTree`). All green, pushed. Full detail in the dated entries at the TOP of this file.
+- **NEXT = Phase 2 exit-gate writeup, then Phase 3.** The gate is met in-tree (see the 2b/2c top entry):
+  semantic no-textual-conflict case (rung-2 build + rung-5 metamorphic), region-confinement + AST bounds
+  (2a), reproducibility twice across N agents (2d/2e). Remaining work is the writeup/corpus consolidation
+  then **Phase 3** (control plane + git-I/O trusted zone — `internal/gitio`, `worker/`, Queues/Workflow).
+  See `GO_PRODUCTION_PLAN.md` §3 Phase 3.
 - **Carry-over follow-ups (not blockers):** wire `merge.IntegrateTree` into `run.Service` behind a
-  `RunSpec` flag + per-agent incompatibility attribution over the tree (2e); real coverage non-regression
-  via Keploy to close the `t.Skip()` gap in `CountTestFuncs` (2a).
+  `RunSpec` flag + per-agent incompatibility attribution over the tree (2e); surface `Options.Contracts`
+  through `run.RunSpec` so the metamorphic rung is reachable from the service/CLI (2c); real coverage
+  non-regression via Keploy to close the `t.Skip()` gap in `CountTestFuncs` (2a).
 
 ### TS hackathon pipeline (ON HOLD — reference only, not the current focus)
 - **Live dashboard:** https://braid-worker.kunalchandoa925.workers.dev/  (money-shot visual)
