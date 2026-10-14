@@ -1,0 +1,17 @@
+# Keep the build context small and free of JS/infra noise — the image only needs
+# the Go module.
+.git
+node_modules
+**/node_modules
+worker
+dashboard
+hackathon
+.wrangler
+dist
+coverage
+*.log
+.DS_Store
+.dev.vars
+**/*_test.go
+scratch
+.tmp
