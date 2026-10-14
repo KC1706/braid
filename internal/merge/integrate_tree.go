@@ -102,7 +102,22 @@ func IntegrateTree(ctx context.Context, o Options) (Result, error) {
 	if runVerdict != models.VerdictIncompatible {
 		runVerdict = finalVerify.Verdict
 	}
-	green := runVerdict == models.VerdictGreen && finalVerify.Passed
+
+	// Rung 5 (metamorphic): same gate as the linear path — only on an otherwise
+	// green merge; a surviving-behavior violation turns the run red.
+	var metamorphic *models.MetamorphicRecord
+	if len(o.Contracts) > 0 && runVerdict != models.VerdictIncompatible && finalVerify.Passed {
+		rec, err := runMetamorphic(ctx, o, log, emit)
+		if err != nil {
+			return Result{}, err
+		}
+		metamorphic = rec
+		if !rec.Passed {
+			runVerdict = models.VerdictRed
+		}
+	}
+
+	green := runVerdict == models.VerdictGreen && finalVerify.Passed && (metamorphic == nil || metamorphic.Passed)
 
 	trail := models.Trail{
 		Task:              o.Task,
@@ -117,6 +132,7 @@ func IntegrateTree(ctx context.Context, o Options) (Result, error) {
 		FinalVerification: &models.VerificationRecord{
 			Verdict: finalVerify.Verdict, Summary: finalVerify.Summary, Rungs: finalVerify.Rungs,
 		},
+		Metamorphic: metamorphic,
 		Summary: models.TrailSummary{
 			AgentsMerged:      countMerged(agentRecords),
 			FilesAutoMerged:   countAutoMerged(agentRecords),

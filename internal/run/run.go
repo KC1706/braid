@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/KC1706/braid/internal/contract"
 	"github.com/KC1706/braid/internal/event"
 	"github.com/KC1706/braid/internal/exec"
 	"github.com/KC1706/braid/internal/ladder"
@@ -46,6 +47,13 @@ type RunSpec struct {
 	Sandbox bool `json:"sandbox,omitempty"`
 	// Vet adds `go vet` to the build rung.
 	Vet bool `json:"vet,omitempty"`
+	// Tree folds the agents as a pairwise tree of depth O(log N) (2e) instead of
+	// the linear fold; the full suite still runs once at the root.
+	Tree bool `json:"tree,omitempty"`
+	// Contracts, when present, enable the Rung-5 metamorphic gate: each agent's
+	// acceptance contract (keyed to its agent id) is snapshotted on its own fork
+	// and re-checked on the merged tree (2b/2c). Empty → the rung is skipped.
+	Contracts []contract.Contract `json:"contracts,omitempty"`
 	// DashboardURL, when set (and no Emitter is injected on the Service), streams
 	// the live event feed to the Orchestrator DO at that worker base URL.
 	DashboardURL string `json:"dashboardUrl,omitempty"`
@@ -116,7 +124,7 @@ func (s Service) Run(ctx context.Context, spec RunSpec) (RunResult, error) {
 		emit = emitter.Emit
 	}
 
-	out, err := merge.Integrate(ctx, merge.Options{
+	opts := merge.Options{
 		RepoDir:           spec.RepoDir,
 		Baseline:          spec.Baseline,
 		IntegrationBranch: spec.IntegrationBranch,
@@ -126,9 +134,15 @@ func (s Service) Run(ctx context.Context, spec RunSpec) (RunResult, error) {
 		Ladder:            lad,
 		MaxRetries:        spec.MaxRetries,
 		CanonicalOrder:    true, // production runs fold agents deterministically (2d)
+		Contracts:         spec.Contracts,
 		Log:               log,
 		Emit:              emit,
-	})
+	}
+	integrate := merge.Integrate
+	if spec.Tree {
+		integrate = merge.IntegrateTree
+	}
+	out, err := integrate(ctx, opts)
 	if emitter != nil {
 		// Best-effort: deliver any buffered events before returning.
 		_ = emitter.Flush()

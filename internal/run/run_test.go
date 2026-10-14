@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/KC1706/braid/internal/contract"
 	"github.com/KC1706/braid/internal/demo"
 	"github.com/KC1706/braid/internal/exec"
 	"github.com/KC1706/braid/pkg/models"
@@ -181,5 +182,51 @@ func TestResolverFor(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	if _, err := resolverFor("claude"); err == nil {
 		t.Error("claude without ANTHROPIC_API_KEY should error")
+	}
+}
+
+func TestServiceRunTree(t *testing.T) {
+	repoDir, baseline, agents := seedDemo(t)
+	res, err := Service{}.Run(context.Background(), RunSpec{
+		RepoDir: repoDir, Baseline: baseline, Task: "tree run",
+		Agents: agents, MaxRetries: 2, Tree: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Green || res.Verdict != models.VerdictGreen {
+		t.Fatalf("want green via tree fold, got verdict=%q green=%v", res.Verdict, res.Green)
+	}
+	if res.Summary.AgentsMerged != 3 {
+		t.Errorf("want 3 agents merged, got %d", res.Summary.AgentsMerged)
+	}
+}
+
+func TestServiceRunContractsPassThrough(t *testing.T) {
+	repoDir, baseline, agents := seedDemo(t)
+	// A contract for the first demo agent, naming a test that does not exist on
+	// the fork: the rung must RUN (proving pass-through) but impose no obligation
+	// (a fork-failing check establishes nothing), so the run stays green.
+	contracts := []contract.Contract{{
+		Agent:  agents[0].ID,
+		Intent: "pass-through probe",
+		Checks: []contract.Check{{Name: "probe", Package: "./...", Test: "TestDoesNotExist"}},
+	}}
+	res, err := Service{}.Run(context.Background(), RunSpec{
+		RepoDir: repoDir, Baseline: baseline, Task: "contracts run",
+		Agents: agents, MaxRetries: 2, Contracts: contracts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := res.Trail.Metamorphic
+	if m == nil {
+		t.Fatal("expected the metamorphic rung to run (Trail.Metamorphic set)")
+	}
+	if m.Checked != 1 {
+		t.Fatalf("Checked = %d, want 1", m.Checked)
+	}
+	if !m.Passed || !res.Green {
+		t.Fatalf("a fork-failing check imposes no obligation; want green, got passed=%v green=%v", m.Passed, res.Green)
 	}
 }
