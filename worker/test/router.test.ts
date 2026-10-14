@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { handleV1, type Deps, type Fork, type RunsStore } from "../src/v1/router";
+import { handleV1, type Deps, type Provision, type RunsStore } from "../src/v1/router";
 import { MapTokenStore, type Principal } from "../src/v1/auth";
 import { MapIdempotencyStore } from "../src/v1/idempotency";
 import type { Run } from "../src/v1/lifecycle";
@@ -30,8 +30,11 @@ function deps(overrides: Partial<Deps> = {}): Deps & { runs: MemRuns; enqueued: 
     idem: new MapIdempotencyStore(),
     runs,
     forker: {
-      async fork(_base: string, agents: string[]): Promise<Fork[]> {
-        return agents.map((a) => ({ agent: a, name: `base-${a}`, remote: `https://r/${a}`, token: `tok-${a}` }));
+      async provision(base: string, agents: string[]): Promise<Provision> {
+        return {
+          base: { remote: `https://r/${base}`, branch: "main", token: `base-tok` },
+          forks: agents.map((a) => ({ agent: a, name: `${base}-${a}`, remote: `https://r/${a}`, token: `tok-${a}` })),
+        };
       },
     },
     enqueue: async (run) => {

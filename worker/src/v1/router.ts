@@ -29,9 +29,27 @@ export interface Fork {
   expiresAt?: string;
 }
 
-/** Forker provisions one fork + write token per agent off a seeded base. */
+/** BaseProvision is the base repo's own remote + a write token for publishing. */
+export interface BaseProvision {
+  remote: string;
+  branch: string;
+  token: string;
+  expiresAt?: string;
+}
+
+/** Provision is the full set of repos + scoped tokens a run needs. */
+export interface Provision {
+  base: BaseProvision;
+  forks: Fork[];
+}
+
+/**
+ * Forker provisions, off a seeded base, one fork + read token per agent AND a
+ * write token for the base itself (the publish target). All tokens are scoped and
+ * short-lived; they are handed only to the trusted io zone.
+ */
 export interface Forker {
-  fork(base: string, agents: string[]): Promise<Fork[]>;
+  provision(base: string, agents: string[]): Promise<Provision>;
 }
 
 /** RunsStore persists run records and their per-run HMAC secret. */
@@ -46,8 +64,9 @@ export interface Deps {
   idem: IdempotencyStore;
   runs: RunsStore;
   forker: Forker;
-  /** Enqueue the run for the Workflow consumer (Phase 3c); a no-op is fine. */
-  enqueue: (run: Run, forks: Fork[]) => Promise<void>;
+  /** Enqueue the run for the Workflow consumer (Phase 3c). Gets the provisioned
+   *  repos/tokens and the run's per-run HMAC secret (for signed event ingress). */
+  enqueue: (run: Run, prov: Provision, secret: string) => Promise<void>;
   now: () => string;
   newId: () => string;
   newSecret: () => string;
@@ -114,7 +133,7 @@ async function createRunHandler(req: Request, deps: Deps): Promise<Response> {
       ? body.agents
       : ["agent-1", "agent-2", "agent-3"];
 
-  const forks = await deps.forker.fork(body.base, agents);
+  const prov = await deps.forker.provision(body.base, agents);
   const secret = deps.newSecret();
   const run = createRun({
     id: deps.newId(),
@@ -125,7 +144,8 @@ async function createRunHandler(req: Request, deps: Deps): Promise<Response> {
     idempotencyKey: key ?? undefined,
   });
   await deps.runs.create(run, secret);
-  await deps.enqueue(run, forks);
+  await deps.enqueue(run, prov, secret);
+  const forks = prov.forks;
 
   const payload = {
     id: run.id,

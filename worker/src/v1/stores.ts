@@ -6,14 +6,15 @@
  * fakes). Keeping them here keeps index.ts thin and the interfaces honest.
  */
 
-import type { Fork, Forker, RunsStore } from "./router";
+import type { Fork, Forker, Provision, RunsStore } from "./router";
 import type { IdempotencyRecord, IdempotencyStore } from "./idempotency";
 import type { Run } from "./lifecycle";
 
 /** The subset of an Artifacts repo handle the forker uses. */
 export interface ArtifactsHandle {
   fork(name: string, opts?: { defaultBranchOnly?: boolean }): Promise<{ remote: string }>;
-  createToken(scope: "write", ttl: number): Promise<{ plaintext: string; expiresAt: string }>;
+  createToken(scope: "read" | "write", ttl: number): Promise<{ plaintext: string; expiresAt: string }>;
+  info(): Promise<{ remote: string; defaultBranch?: string }>;
 }
 /** The subset of the Artifacts binding the forker uses. */
 export interface ArtifactsBinding {
@@ -26,19 +27,30 @@ export interface DONamespace {
   get(id: unknown): { fetch(req: Request): Promise<Response> };
 }
 
-/** ArtifactsForker provisions one fork + short-lived write token per agent. */
+/**
+ * ArtifactsForker provisions, off a seeded base: one fork + short-lived WRITE
+ * token per agent (the agent pushes its work to its own fork), plus the base's
+ * own remote + a short-lived WRITE token for publishing the merged result. All
+ * tokens are 1-hour scoped and only ever reach the trusted io zone.
+ */
 export class ArtifactsForker implements Forker {
   constructor(private readonly artifacts: ArtifactsBinding) {}
-  async fork(base: string, agents: string[]): Promise<Fork[]> {
-    const out: Fork[] = [];
-    const handle = await this.artifacts.get(base);
+  async provision(base: string, agents: string[]): Promise<Provision> {
+    const baseHandle = await this.artifacts.get(base);
+    const info = await baseHandle.info();
+    const baseTok = await baseHandle.createToken("write", 3600);
+
+    const forks: Fork[] = [];
     for (const agent of agents) {
       const name = `${base}-${agent}`;
-      const forked = await handle.fork(name, { defaultBranchOnly: true });
+      const forked = await baseHandle.fork(name, { defaultBranchOnly: true });
       const tok = await (await this.artifacts.get(name)).createToken("write", 3600);
-      out.push({ agent, name, remote: forked.remote, token: tok.plaintext, expiresAt: tok.expiresAt });
+      forks.push({ agent, name, remote: forked.remote, token: tok.plaintext, expiresAt: tok.expiresAt });
     }
-    return out;
+    return {
+      base: { remote: info.remote, branch: info.defaultBranch ?? "main", token: baseTok.plaintext, expiresAt: baseTok.expiresAt },
+      forks,
+    };
   }
 }
 

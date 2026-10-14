@@ -8,13 +8,26 @@
     { "binding": "ARTIFACTS", "namespace": "braid" }
   ],
   "ai": { "binding": "AI" },
+  // Phase 3c: the two compute Containers (one braid image, zone chosen by
+  // BRAID_ZONE in each class). Both build from the repo-root Dockerfile.
+  "containers": [
+    { "class_name": "ComputeZone", "image": "../Dockerfile", "image_build_context": "..", "max_instances": 5 },
+    { "class_name": "IOZone", "image": "../Dockerfile", "image_build_context": "..", "max_instances": 5 }
+  ],
+  // Phase 3c: the durable consumer that drives one run's two-zone pipeline.
+  "workflows": [
+    { "name": "braid-integration", "binding": "INTEGRATION_WORKFLOW", "class_name": "IntegrationWorkflow" }
+  ],
   "durable_objects": {
     "bindings": [
-      { "name": "ORCHESTRATOR", "class_name": "Orchestrator" }
+      { "name": "ORCHESTRATOR", "class_name": "Orchestrator" },
+      { "name": "COMPUTE_ZONE", "class_name": "ComputeZone" },
+      { "name": "IO_ZONE", "class_name": "IOZone" }
     ]
   },
   "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["Orchestrator"] }
+    { "tag": "v1", "new_sqlite_classes": ["Orchestrator"] },
+    { "tag": "v2", "new_sqlite_classes": ["ComputeZone", "IOZone"] }
   ],
   "assets": {
     "directory": "../dashboard/public",

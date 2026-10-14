@@ -13,11 +13,21 @@ import { MapTokenStore, type Principal, type Role } from "./v1/auth";
 import { ArtifactsForker, DOIdempotencyStore, DORunsStore } from "./v1/stores";
 import { newSecret as newRunSecret, verify as verifyHmac, SIGNATURE_HEADER } from "./v1/hmac";
 import type { Run } from "./v1/lifecycle";
+import type { IntegrationJob } from "./v1/integration";
+
+// Phase 3c classes the runtime instantiates (Containers + the durable consumer).
+export { ComputeZone, IOZone } from "./containers";
+export { IntegrationWorkflow } from "./v1/workflow";
 
 interface Env {
   ARTIFACTS: ArtifactsNamespace;
   AI: { run(model: string, input: unknown): Promise<{ response?: string } & Record<string, unknown>> };
   ORCHESTRATOR: DurableObjectNamespace;
+  // Phase 3c bindings: the two compute Containers (DO-backed) + the durable
+  // Workflow that drives one run's two-zone pipeline.
+  COMPUTE_ZONE: DurableObjectNamespace;
+  IO_ZONE: DurableObjectNamespace;
+  INTEGRATION_WORKFLOW: Workflow;
   // CONTROL_TOKENS is a JSON map of bearer token -> { id, roles[] } for the /v1
   // control plane (a Worker secret in prod). Absent -> /v1 has no valid tokens,
   // so every /v1 request is 401 (fail closed), never open.
@@ -103,7 +113,29 @@ export default {
       idem: new DOIdempotencyStore(env.ORCHESTRATOR),
       runs: new DORunsStore(env.ORCHESTRATOR),
       forker: new ArtifactsForker(env.ARTIFACTS as unknown as ConstructorParameters<typeof ArtifactsForker>[0]),
-      enqueue: async () => {}, // Phase 3c: a Queue consumer drives the run; no-op for now
+      // Phase 3c: start the durable Workflow that drives this run's two-zone
+      // pipeline (io snapshot -> compute integrate -> io CAS-publish). The job
+      // carries the provisioned remotes + scoped tokens and the per-run HMAC
+      // secret; tokens are handed only to the io zone inside the Workflow.
+      enqueue: async (run, prov, secret) => {
+        const job: IntegrationJob = {
+          runId: run.id,
+          task: run.task,
+          base: {
+            remote: prov.base.remote,
+            branch: prov.base.branch,
+            token: { plaintext: prov.base.token, expiresAt: prov.base.expiresAt },
+          },
+          agents: prov.forks.map((f) => ({
+            id: f.agent,
+            remote: f.remote,
+            branch: "main",
+            token: { plaintext: f.token, expiresAt: f.expiresAt },
+          })),
+          eventSecret: secret,
+        };
+        await env.INTEGRATION_WORKFLOW.create({ id: run.id, params: job });
+      },
       now: () => new Date().toISOString(),
       newId: () => `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
       newSecret: newRunSecret,
@@ -423,6 +455,25 @@ export class Orchestrator {
       const secret = await this.ctx.storage.get<string>("secret");
       if (!run) return json({ error: "run not found" }, 404);
       return json({ run, secret });
+    }
+
+    // Control-plane: record a SHA Braid itself just published, so a later inbound
+    // change event naming it can be dropped instead of spawning a run from our own
+    // merge (C9 self-trigger guard). The external Artifacts webhook that would feed
+    // such events is not wired here yet; this persists the guard's state for it.
+    if (sub === "/published" && req.method === "POST") {
+      const { sha } = (await req.json().catch(() => ({}))) as { sha?: string };
+      if (sha) {
+        const published = (await this.ctx.storage.get<string[]>("published")) ?? [];
+        if (!published.includes(sha)) {
+          published.push(sha);
+          await this.ctx.storage.put("published", published.slice(-50));
+        }
+      }
+      return json({ ok: true });
+    }
+    if (sub === "/published") {
+      return json({ published: (await this.ctx.storage.get<string[]>("published")) ?? [] });
     }
 
     // Dashboard subscribes here.
