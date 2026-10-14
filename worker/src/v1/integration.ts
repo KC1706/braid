@@ -21,6 +21,8 @@ import {
 /** IntegrationJob is the enqueued unit of work (the Workflow's params). */
 export interface IntegrationJob {
   runId: string;
+  /** Stable base identity (the base repo name) — the Base-Coordinator DO key. */
+  baseKey: string;
   task?: string;
   resolver?: string;
   tree?: boolean;

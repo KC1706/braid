@@ -13,7 +13,8 @@
 
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { ContainerZoneClient, type ContainerNamespace } from "./zones";
-import type { IntegrateResponse, PublishResponse, SnapshotResponse } from "./ztypes";
+import { BaseMovedError, type IntegrateResponse, type PublishResponse, type SnapshotResponse } from "./ztypes";
+import { BaseCoordinatorClient, type CoordinatorNamespace } from "./coordinator-do";
 import {
   runIntegration,
   type IntegrationJob,
@@ -27,11 +28,15 @@ import { applyAction, type Run, type RunAction } from "./lifecycle";
 export interface WorkflowEnv {
   COMPUTE_ZONE: ContainerNamespace;
   IO_ZONE: ContainerNamespace;
+  BASE_COORDINATOR: CoordinatorNamespace;
   ORCHESTRATOR: {
     idFromName(name: string): unknown;
     get(id: unknown): { fetch(req: Request): Promise<Response> };
   };
 }
+
+/** Lease TTL for a publish: long enough to clone + fetch-bundle + CAS-push. */
+const PUBLISH_LEASE_TTL_SECONDS = 300;
 
 const DO_BASE = "https://do";
 const stepRetry = { retries: { limit: 3, delay: "5 seconds" as const, backoff: "exponential" as const } };
@@ -41,6 +46,7 @@ export class IntegrationWorkflow extends WorkflowEntrypoint<WorkflowEnv, Integra
     const job = event.payload;
     const io = new ContainerZoneClient(this.env.IO_ZONE, `io-${job.runId}`, true);
     const compute = new ContainerZoneClient(this.env.COMPUTE_ZONE, `compute-${job.runId}`, false);
+    const coordinator = new BaseCoordinatorClient(this.env.BASE_COORDINATOR);
 
     // Claim the run: queued -> running. Idempotent — a Workflow replay re-runs this
     // step, and applyAction simply no-ops if the run already left queued.
@@ -58,7 +64,31 @@ export class IntegrationWorkflow extends WorkflowEntrypoint<WorkflowEnv, Integra
       {
         io: {
           snapshot: (req) => step.do("io:snapshot", stepRetry, () => io.snapshot(req)) as Promise<SnapshotResponse>,
-          publish: (req) => step.do("io:publish", stepRetry, () => io.publish(req)) as Promise<PublishResponse>,
+          // Publish is gated by the Base-Coordinator. begin acquires the base
+          // lease + CAS on the parent SHA; it is its own step that retries only
+          // while the base is BUSY (another run holds the lease). A stale base
+          // (base_moved) is thrown from this plain wrapper so runIntegration maps
+          // it to the base_moved outcome instead of retrying. On a granted lease,
+          // io.publish + the coordinator commit run as one step (abort on failure).
+          publish: async (req) => {
+            const begin = await step.do("coord:begin", stepRetry, async () => {
+              const r = await coordinator.begin(job.baseKey, job.runId, req.baseSha, PUBLISH_LEASE_TTL_SECONDS);
+              if (r.status === "busy") throw new Error(`base ${job.baseKey} busy (held by ${r.holder}); retrying`);
+              return r; // granted | base_moved
+            });
+            if (begin.status === "base_moved") throw new BaseMovedError();
+            return step.do("io:publish", stepRetry, async () => {
+              try {
+                const pub = await io.publish(req);
+                const commit = await coordinator.commit(job.baseKey, job.runId, pub.pushedSha);
+                if (commit.status !== "ok") throw new Error(`coordinator commit rejected: ${commit.status}`);
+                return pub;
+              } catch (e) {
+                await coordinator.abort(job.baseKey, job.runId);
+                throw e;
+              }
+            }) as Promise<PublishResponse>;
+          },
         },
         compute: {
           integrate: (req) =>

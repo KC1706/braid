@@ -18,6 +18,8 @@ import type { IntegrationJob } from "./v1/integration";
 // Phase 3c classes the runtime instantiates (Containers + the durable consumer).
 export { ComputeZone, IOZone } from "./containers";
 export { IntegrationWorkflow } from "./v1/workflow";
+// Phase 4a: per-base lease + parent-SHA CAS coordinator.
+export { BaseCoordinator } from "./v1/coordinator-do";
 
 interface Env {
   ARTIFACTS: ArtifactsNamespace;
@@ -27,6 +29,7 @@ interface Env {
   // Workflow that drives one run's two-zone pipeline.
   COMPUTE_ZONE: DurableObjectNamespace;
   IO_ZONE: DurableObjectNamespace;
+  BASE_COORDINATOR: DurableObjectNamespace;
   INTEGRATION_WORKFLOW: Workflow;
   // CONTROL_TOKENS is a JSON map of bearer token -> { id, roles[] } for the /v1
   // control plane (a Worker secret in prod). Absent -> /v1 has no valid tokens,
@@ -120,6 +123,7 @@ export default {
       enqueue: async (run, prov, secret) => {
         const job: IntegrationJob = {
           runId: run.id,
+          baseKey: run.base,
           task: run.task,
           base: {
             remote: prov.base.remote,

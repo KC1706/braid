@@ -14,6 +14,7 @@ import {
 
 const job: IntegrationJob = {
   runId: "run-1",
+  baseKey: "base-repo",
   task: "t",
   eventSecret: "sek",
   base: { remote: "https://base", branch: "main", token: { plaintext: "base-tok" } },
