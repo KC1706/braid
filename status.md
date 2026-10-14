@@ -3,7 +3,7 @@
 > Cross-session memory. Update this at the end of every work session: what changed, what's next,
 > what's blocked. Newest entry on top. See `plan.md` for the full plan.
 
-**Deadline:** 2026-10-14 · **Today:** 2026-10-14 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1–3 COMPLETE & DEPLOYED LIVE** + **Phase 4a/4b DONE & LIVE** on `braid-worker.kunalchandoa925.workers.dev` (account `06bff0b6…`). Base-Coordinator (per-base lease + parent-SHA CAS) live + **concurrency gate PASSED** (two concurrent same-base runs: one published, the other CAS-rejected, base intact, no duplicate). Signed ledger in R2 live + **tamper-evidence gate PASSED cross-language** (Worker writes a signed chain, `braid ledger verify` validates it with only the public key; mutation + hash-reforge both detected). Next = auto-rebase the base_moved loser; 4c seq-numbered events; then Phase 5 (console). (hackathon submission on hold — user pivot)
+**Deadline:** 2026-10-14 · **Today:** 2026-10-14 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1–3 COMPLETE & DEPLOYED LIVE** + **Phase 4a/4b DONE & LIVE** on `braid-worker.kunalchandoa925.workers.dev` (account `06bff0b6…`). Base-Coordinator (per-base lease + parent-SHA CAS) live + **concurrency gate PASSED** (two concurrent same-base runs: one published, the other CAS-rejected, base intact, no duplicate). Signed ledger in R2 live + **tamper-evidence gate PASSED cross-language** (Worker writes a signed chain, `braid ledger verify` validates it with only the public key; mutation + hash-reforge both detected). **Auto-rebase DONE & live-proven** (the CAS-losing run re-snapshots + re-merges onto the winner and succeeds — `rebase:2` fired live). Next = 4c (seq-numbered Orchestrator events + R2 blobs); then Phase 5 (console). (hackathon submission on hold — user pivot)
 
 ## ✅ 2026-10-14 — Phase 4a + 4b: Base-Coordinator (live concurrency gate PASSED) + signed ledger
 - **4a Base-Coordinator (C8) — DEPLOYED & PROVEN LIVE.** One coordinator per base serializes publishes in
@@ -30,11 +30,29 @@
 - **Phase-4 exit gate status:** no non-fast-forward data loss ✅ (live), no duplicate runs ✅ (live), ledger
   tamper-evident ✅ (unit), no self-trigger ✅ (`isSelfPush` + guard store; external Artifacts→Worker webhook
   still unwired so nothing can loop yet). Commits `297442c` (ledger), `b0677a3` (coordinator), this doc.
-- **Known Phase-4 follow-ups:** (1) the base_moved loser is NOT auto-rebased/retried yet — it stays `running`
-  until cancelled (the CAS prevents the clobber, which is the safety-critical half; auto-rebase is next).
-  (2) 4c (seq-numbered Orchestrator events + blobs→R2, rebuildable) not started; the DO already persists reduced
-  state. (3) each run gets its own compute/io container instance (`*-${runId}`) → per-run isolation (good for
-  security) at the cost of a cold start per run.
+- **Known Phase-4 follow-ups:** (1) ✅ DONE — auto-rebase (see entry below). (2) 4c (seq-numbered Orchestrator
+  events + blobs→R2, rebuildable) not started; the DO already persists reduced state. (3) each run gets its own
+  compute/io container instance (`*-${runId}`) → per-run isolation (good for security) at the cost of a cold
+  start per run.
+
+## ✅ 2026-10-14 — Phase 4a auto-rebase DONE & PROVEN LIVE (the CAS loser self-heals)
+- A `base_moved` run now re-snapshots the advanced base and re-merges instead of sitting in `running` until
+  cancelled. `workflow.ts`: a bounded rebase loop (`MAX_REBASE_ATTEMPTS=3`) runs `runIntegration` per attempt via
+  `buildDeps(attempt)`, which suffixes every `step.do` name with the attempt (Workflows memoize by name, so a
+  retry needs fresh names) and gives emitted events a monotonic counter. A `base_moved` outcome → another attempt;
+  the re-snapshot clones the now-current base (agent forks unchanged), so the retry rebases onto the new tip.
+  Exhaustion → terminal `fail` (never a stuck run).
+- **Core fix the first live run exposed:** `io.publish` can fail the **git-level** CAS (gitio
+  `--force-with-lease`) *inside* the `io:publish` step even after the coordinator grant — the coordinator reduces
+  but can't eliminate the race; git is the ultimate guard. A throw inside `step.do` gets RETRIED, so `base_moved`
+  never reached the loop and the workflow errored. `io:publish` now returns `base_moved` as a VALUE (no retry) and
+  re-throws it in plain code where `runIntegration` catches it; a genuine/transient error (e.g. a clone 502) still
+  throws + retries.
+- **PROVEN LIVE:** two truly-concurrent runs on one base both snapshotted the original base and raced at publish.
+  Run B won first-try (`@1` steps only, merge `cb993e67`); **Run A lost the git CAS, ran `rebase:2`, re-snapshotted
+  (`io:snapshot@2`) + re-merged (`compute:integrate@2`) + re-published (`io:publish@2`) → succeeded** (merge
+  `562ce101`, descends from B's). Both runs `succeeded`, no clobber, base chains baseline→B→A. (Commit `5ccff99`,
+  deploy `41c44828`.)
 
 ## ✅ 2026-10-14 — Phase 4b ledger DEPLOYED & live-gate PASSED (signed provenance in R2, cross-language verify)
 - R2 enabled on the account; bucket `braid-ledger` created; `LEDGER_SIGNING_SEED` secret set; worker redeployed
