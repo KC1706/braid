@@ -3,7 +3,40 @@
 > Cross-session memory. Update this at the end of every work session: what changed, what's next,
 > what's blocked. Newest entry on top. See `plan.md` for the full plan.
 
-**Deadline:** 2026-10-14 · **Today:** 2026-10-14 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1 COMPLETE** + **Phase 2 COMPLETE (2a–2e)** + **Phase 3a done** (`internal/gitio` + `cmd/braid run`) + **Phase 3b DEPLOYED + VALIDATED LIVE** (`/v1` control plane on `braid-worker.kunalchandoa925.workers.dev`; Artifacts fork+token provisioning, full `/v1` authed lifecycle, idempotency, and the C10 HMAC event gate all proven end-to-end on real Cloudflare infra — see below); next = Phase 3c Queues/Workflow + the red-team half of the deploy gate (untrusted-code compute zone via Containers) (hackathon submission on hold — user pivot)
+**Deadline:** 2026-10-14 · **Today:** 2026-10-14 · **Phase:** PRODUCTIONIZING THE GO VERSION — GO_PRODUCTION_PLAN **Phase 1–3 COMPLETE & DEPLOYED LIVE** on `braid-worker.kunalchandoa925.workers.dev` (account `06bff0b6…`). Phase 3c (Containers + durable Workflow) is live and the **full Phase-3 deploy gate PASSED** — an external client drove the two-zone pipeline through `POST /v1/runs` on a real Artifacts base, and the red-team (no token + default-deny egress in the compute zone, proven by a green block-probe AND a red require-probe) holds end-to-end. Next = Phase 4 (Base-Coordinator DO + signed ledger). (hackathon submission on hold — user pivot)
+
+## ✅ 2026-10-14 — Phase 3c COMPLETE & DEPLOYED: two-zone Containers + durable Workflow; deploy gate PASSED
+- **Architecture (two Cloudflare Containers, one braid image, zone by `BRAID_ZONE`):**
+  - **ComputeZone** (`instance_type: standard-2`, **`enableInternet=false`**, never handed a token) runs the merge
+    engine + the agents' `go test` (Rungs 2+4+5). **IOZone** (`basic`, egress to Artifacts, holds the scoped
+    tokens) runs only git: clone base + each fork, and CAS-push the merged bundle. The merged tree crosses the
+    boundary ONLY as a content-addressed git bundle — the two-zone invariant (C13/C15) made structural.
+  - **Go side (`internal/serve` + `internal/gitio/snapshot.go`, offline-tested):** `braid serve -zone io|compute`
+    exposes `/io/snapshot`, `/io/publish`, `/compute/integrate`. `SnapshotForks` (clone base + fetch each fork
+    with its own token → one multi-ref bundle) / `OpenPrepared` (reconstruct the repo offline). Full two-zone
+    round-trip test over local bare repos (snapshot→compute `go test`→CAS publish), CAS-409, and a guard that the
+    compute zone does not serve the token-bearing `/io` routes. Dockerfile (golang:1.26.3, `GOTOOLCHAIN=local`).
+  - **Worker side (`worker/src/v1/`, 39 vitest + `tsc` clean):** `ztypes.ts` (pure wire types, no runtime import) /
+    `zones.ts` (`ContainerZoneClient` over @cloudflare/containers) / `integration.ts` (`runIntegration` — the pure,
+    unit-tested orchestration: io.snapshot→compute.integrate→io.publish on green, token handed ONLY to io calls,
+    `BaseMovedError`→`base_moved`; plus `isSelfPush` C9 guard) / `workflow.ts` (`IntegrationWorkflow`: each zone
+    call + event a durable `step.do`, events signed with the run's HMAC secret, lifecycle reconciled; claims the
+    run queued→running first). `POST /v1/runs` `enqueue` now starts the Workflow; `ArtifactsForker` provisions the
+    base write token + per-fork tokens. Orchestrator DO gained `/runs/:id/published` (C9 guard store).
+- **DEPLOY GATE PASSED (live, end-to-end):**
+  - **Green run:** seeded a Go base whose tests are red-team probes, `POST /v1/runs` (2 agents) →
+    `queued→running→succeeded`, verdict green, base remote `main` advanced to the merged commit `773ea9c4`. The
+    compute zone ran `TestNoCredentialsInEnv` (no `art_v2`/token/bearer in env) **and** `TestEgressDenied` (dials
+    to 1.1.1.1:443 + cloudflare.com:443 blocked) — both PASSED, so green **is** the proof of token-isolation +
+    default-deny egress.
+  - **Negative control:** a base whose `TestEgressRequired` DEMANDS egress → run went **RED (incompatible)** and
+    **did not publish** (remote stayed at baseline, guard store empty). Proves the probe genuinely executes in the
+    compute zone AND egress is really blocked (not skipped), and that a red verdict refuses to publish.
+- **Known follow-ups:** `go test` in the compute zone is offline (`GOPROXY` unused), so a user repo with external
+  deps needs vendored modules or an in-zone proxy; the external **Artifacts→Worker push webhook** that would feed
+  the C9 `isSelfPush` guard real change events is not wired (the guard + its store are ready for it); first compute
+  run cold-starts ~3–4 min (image pull). Commits: `66af3d5` (serve+gitio), `2433d7e` (Dockerfile), `1b97f0b`
+  (Worker wiring), `3fe9ef7` (run-claim fix + instance sizing), this doc.
 
 ## ✅ 2026-10-14 — Phase 3b DEPLOYED to real Cloudflare + Artifacts provisioning validated live
 - **Deployed** `braid-worker` → `https://braid-worker.kunalchandoa925.workers.dev` (account `06bff0b6…`,

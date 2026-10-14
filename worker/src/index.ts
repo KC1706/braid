@@ -323,7 +323,8 @@ function reduce(s: RunState, e: BraidEvent): RunState {
       s.phase = "integrating";
       const a = s.agents[e.agent];
       if (a) a.merge = "merging";
-      pushLog(s, `integrating ${e.agent}…`);
+      // scope "all" (Phase 3c) = the whole fold; a named agent = the linear path.
+      pushLog(s, e.agent ? `integrating ${e.agent}…` : `integrating ${e.scope === "all" ? "all agents" : "merge"}…`);
       break;
     }
     case "merge:auto": {
