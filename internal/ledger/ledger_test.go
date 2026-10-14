@@ -84,9 +84,9 @@ func TestVerifyDetectsForgedHashWithoutKey(t *testing.T) {
 	// Attacker rewrites the payload AND recomputes the content hash + relinks the
 	// next record — but cannot forge the Ed25519 signature without the key.
 	records[2].Payload["tests"] = "0"
-	records[2].Hash = canonicalHash(records[2].Seq, records[2].PrevHash, records[2].RunID, records[2].Kind, records[2].At, records[2].Payload)
+	records[2].Hash = CanonicalHash(records[2].Seq, records[2].PrevHash, records[2].RunID, records[2].Kind, records[2].At, records[2].Payload)
 	records[3].PrevHash = records[2].Hash
-	records[3].Hash = canonicalHash(records[3].Seq, records[3].PrevHash, records[3].RunID, records[3].Kind, records[3].At, records[3].Payload)
+	records[3].Hash = CanonicalHash(records[3].Seq, records[3].PrevHash, records[3].RunID, records[3].Kind, records[3].At, records[3].Payload)
 	// records[3] signature now also mismatches; the first failure is at seq 2.
 	err := VerifyChain(signer.Public(), records)
 	assertVerifyErr(t, err, 2, "invalid signature")

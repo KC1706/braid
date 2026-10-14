@@ -40,6 +40,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, "braid run:", err)
 			os.Exit(1)
 		}
+	case "ledger":
+		if err := runLedger(args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, "braid ledger:", err)
+			os.Exit(1)
+		}
 	default:
 		usage()
 		os.Exit(2)
@@ -51,6 +56,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  demo      seed a throwaway Go repo + 3 agents and integrate them")
 	fmt.Fprintln(os.Stderr, "  serve     run the integration engine as an HTTP service")
 	fmt.Fprintln(os.Stderr, "  run       integrate a prepared repo and (optionally) publish to a base remote")
+	fmt.Fprintln(os.Stderr, "  ledger    keygen | verify — provision + verify the signed provenance chain")
 	fmt.Fprintln(os.Stderr, "  version   print the version")
 }
 

@@ -49,11 +49,13 @@ type Record struct {
 	Signature string            `json:"signature"` // base64 Ed25519 signature over Hash
 }
 
-// canonicalHash computes a record's Hash from its signed contents. Payload keys
+// CanonicalHash computes a record's Hash from its signed contents. Payload keys
 // are folded in a canonical (sorted) order via determinism.ContentHash, so the
-// hash is independent of Go map iteration order — recomputable byte-for-byte by a
-// verifier.
-func canonicalHash(seq uint64, prevHash, runID, kind, at string, payload map[string]string) string {
+// hash is independent of Go map iteration order — recomputable byte-for-byte by
+// any verifier, including the TypeScript writer in the Worker (which replicates
+// this exact construction). Exported so cross-language interop can be pinned to a
+// shared test vector.
+func CanonicalHash(seq uint64, prevHash, runID, kind, at string, payload map[string]string) string {
 	parts := []string{
 		strconv.FormatUint(seq, 10),
 		prevHash,
@@ -164,7 +166,7 @@ func (l *Ledger) Append(runID, kind string, payload map[string]string) (Record, 
 	for k, v := range payload {
 		p[k] = v
 	}
-	hash := canonicalHash(seq, prev, runID, kind, at, p)
+	hash := CanonicalHash(seq, prev, runID, kind, at, p)
 	sig, err := l.signer.Sign(hash)
 	if err != nil {
 		return Record{}, err
@@ -202,7 +204,7 @@ func VerifyChain(pub ed25519.PublicKey, records []Record) error {
 		if r.PrevHash != prev {
 			return &VerifyError{Seq: seq, Reason: "prevHash does not link to the previous record"}
 		}
-		want := canonicalHash(r.Seq, r.PrevHash, r.RunID, r.Kind, r.At, r.Payload)
+		want := CanonicalHash(r.Seq, r.PrevHash, r.RunID, r.Kind, r.At, r.Payload)
 		if r.Hash != want {
 			return &VerifyError{Seq: seq, Reason: "content hash mismatch (record was altered)"}
 		}
@@ -213,6 +215,9 @@ func VerifyChain(pub ed25519.PublicKey, records []Record) error {
 	}
 	return nil
 }
+
+// Records returns the Ledger's chain from its store, in seq order.
+func (l *Ledger) Records() ([]Record, error) { return l.store.List() }
 
 // Verify loads the Ledger's chain from its store and verifies it under pub.
 func (l *Ledger) Verify(pub ed25519.PublicKey) error {
